@@ -1,0 +1,18 @@
+# 依存ライブラリ
+my-diagram-app/node_modules/
+
+# ビルド成果物
+dist/
+dist-ssr/
+*.local
+
+# ログファイル
+*.log
+npm-debug.log*
+
+# エディタ設定
+.vscode/
+
+# OSシステムファイル
+.DS_Store
+Thumbs.db
