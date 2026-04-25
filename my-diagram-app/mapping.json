@@ -1,0 +1,8 @@
+[
+  { "from": "S-002", "to": "D-001", "type": "realizes" },
+  { "from": "S-002", "to": "D-002", "type": "realizes" },
+  { "from": "S-003", "to": "D-003", "type": "realizes" },
+  { "from": "S-004", "to": "D-004", "type": "realizes" },
+  { "from": "S-005", "to": "D-005", "type": "realizes" },
+  { "from": "S-006", "to": "D-006", "type": "realizes" }
+]
