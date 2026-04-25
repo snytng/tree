@@ -19,6 +19,11 @@ import * as Y from 'yjs';
 import { WebrtcProvider } from 'y-webrtc';
 import { IndexeddbPersistence } from 'y-indexeddb';
 import dagre from 'dagre';
+import mappingData from '../mapping.json';
+import JSZip from 'jszip';
+
+import specRaw from '../spec.md?raw';
+import designRaw from '../design.md?raw';
 
 const ROOM_NAME = 'react-flow-demo-room';
 // Yjsドキュメントの初期化
@@ -89,9 +94,10 @@ function Flow() {
   const [nodes, setNodes, onNodesChangeState] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChangeState] = useEdgesState(initialEdges);
   const [isAutoLayout, setIsAutoLayout] = useState(true);
+  const [projectName, setProjectName] = useState('New Project');
   const [lastAddedNodeId, setLastAddedNodeId] = useState(null);
 
-  const { setCenter, getViewport } = useReactFlow();
+  const { setCenter, getViewport, fitView } = useReactFlow();
 
   // デフォルトのエッジオプションを定義
   const defaultEdgeOptions = useMemo(() => ({
@@ -106,6 +112,8 @@ function Flow() {
   // Yjsの共有型（Map）を取得。IDをキーにすることで、個別の要素を効率的に同期できる
   const yNodes = ydoc.getMap('nodes');
   const yEdges = ydoc.getMap('edges');
+  const yProjectFiles = ydoc.getMap('projectFiles'); // 動的なファイル保存用
+  const yProjectMeta = ydoc.getMap('projectMeta'); // プロジェクト名などのメタデータ用
 
   // React Flowの変更をYjsに反映させるハンドラー
   const onNodesChange = useCallback(
@@ -207,6 +215,208 @@ function Flow() {
     setEdges((eds) => eds.filter((edge) => !edge.selected));
   }, [nodes, edges, yNodes, yEdges, setNodes, setEdges]);
 
+  // MarkdownからIDとタイトルを抽出するヘルパー
+  const extractMetadata = (text) => {
+    // ## {セクション番号}. [ID] タイトル という形式に対応 (行頭マッチングを強化)
+    const regex = /^\s*##.*\[([A-Z]-\d{3})\]\s*(.*)$/gm;
+    const metadata = {};
+    let match;
+    while ((match = regex.exec(text)) !== null) {
+      metadata[match[1]] = match[2].trim();
+    }
+    return metadata;
+  };
+
+  // プロジェクトのエクスポート (ZIP出力)
+  const onExportProject = useCallback(async () => {
+    const zip = new JSZip();
+    
+    // Markdownファイルの再構築と保存
+    // yProjectFilesにデータがあればそれを使用、なければ現在のノードから再構築
+    const exportedSpecContent = [];
+    const exportedDesignContent = [];
+
+    nodes.forEach(node => {
+      if (node.id.startsWith('S-')) {
+        exportedSpecContent.push(`## [${node.id}] ${node.data.label.replace(`${node.id}: `, '')}`);
+      } else if (node.id.startsWith('D-')) {
+        exportedDesignContent.push(`## [${node.id}] ${node.data.label.replace(`${node.id}: `, '')}`);
+      }
+    });
+
+    // 既存のyProjectFilesの内容を優先しつつ、ノードから再構築した内容を追加
+    const finalSpecContent = yProjectFiles.get('spec.md') || exportedSpecContent.join('\n\n');
+    const finalDesignContent = yProjectFiles.get('design.md') || exportedDesignContent.join('\n\n');
+
+    if (finalSpecContent) {
+      zip.file('spec.md', finalSpecContent);
+    }
+    if (finalDesignContent) {
+      zip.file('design.md', finalDesignContent);
+    }
+
+    // その他のyProjectFilesに保存されているファイルも追加
+    yProjectFiles.forEach((content, filename) => {
+      if (!['spec.md', 'design.md'].includes(filename)) { // spec.mdとdesign.mdは上記で処理済み
+        zip.file(filename, content);
+      }
+    });
+
+    // mapping.json の動的生成
+    const currentMapping = edges.map(edge => ({
+      from: edge.source,
+      to: edge.target,
+      type: edge.label || 'realizes'
+    }));
+    zip.file('mapping.json', JSON.stringify(currentMapping, null, 2));
+
+    const blob = await zip.generateAsync({ type: 'blob' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${projectName || 'project'}-${Date.now()}.zip`;
+    link.click();
+  }, [nodes, edges, yProjectFiles, projectName]);
+
+  // プロジェクトのインポート (ZIP読み込み)
+  const onImportProject = useCallback(async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    console.group('📂 Project Import Debug');
+    console.log('1. Selected File:', file.name, `(${file.size} bytes)`);
+
+    try {
+      const zip = await JSZip.loadAsync(file);
+      const filesData = {};
+      let importedMapping = [];
+
+      console.log('2. Unzipping files...');
+      for (const [filename, zipEntry] of Object.entries(zip.files)) {
+        if (zipEntry.dir) continue;
+        const content = await zipEntry.async('string');
+        const baseName = filename.split('/').pop(); // フォルダ階層を無視してファイル名のみ取得
+        
+        if (baseName === 'mapping.json') {
+          console.log('   - Found mapping.json');
+          importedMapping = JSON.parse(content);
+        } else if (baseName.endsWith('.md')) {
+          console.log(`   - Found Markdown: ${baseName}`);
+          filesData[baseName] = content;
+        }
+      }
+
+      const allMetadata = {};
+      Object.values(filesData).forEach(content => {
+        Object.assign(allMetadata, extractMetadata(content));
+      });
+
+      console.log('3. Extracted IDs:', Object.keys(allMetadata));
+      console.log('4. Mapping entries:', importedMapping.length);
+
+      const newNodes = Object.entries(allMetadata).map(([id, title]) => ({
+        id,
+        type: 'custom',
+        data: { label: `${id}: ${title}` },
+        position: { x: 0, y: 0 },
+      }));
+
+      const newEdges = importedMapping.map((link, idx) => ({
+        id: `e-${idx}`,
+        source: link.from,
+        target: link.to,
+        label: link.type,
+      }));
+
+      console.log('5. Final data structure:', { nodes: newNodes.length, edges: newEdges.length });
+
+      // 手元の状態を即座に更新（自動レイアウト適用）
+      const layoutedNodes = isAutoLayout && newNodes.length > 0 
+        ? getLayoutedElements(newNodes, newEdges) 
+        : newNodes;
+      
+      setNodes(layoutedNodes);
+      setEdges(newEdges);
+
+      const newProjectName = file.name.replace('.zip', '');
+      setProjectName(newProjectName); // 手元のステートを即座に更新
+
+      // 描画後に全体が収まるように調整
+      setTimeout(() => fitView({ duration: 800, padding: 0.2 }), 100);
+
+      ydoc.transact(() => {
+        yProjectMeta.set('name', newProjectName);
+        yProjectFiles.clear();
+        Object.entries(filesData).forEach(([name, content]) => {
+          yProjectFiles.set(name, content);
+        });
+
+        yNodes.clear();
+        newNodes.forEach(node => yNodes.set(node.id, node));
+
+        yEdges.clear();
+        newEdges.forEach(edge => yEdges.set(edge.id, edge));
+      }, 'local');
+      
+      console.log('✅ Project imported successfully');
+    } catch (error) {
+      console.error('❌ Error importing project:', error);
+    } finally {
+      console.groupEnd();
+    }
+  }, [yNodes, yEdges, yProjectFiles, yProjectMeta, setNodes, setEdges, isAutoLayout, setProjectName, fitView]);
+
+  // ドキュメントツリーをインポートする関数
+  const onImportDocTree = useCallback(() => {
+    console.log('onImportDocTree: Started');
+    try {
+      // yProjectFilesが空ならデフォルト（内蔵MD）を使用
+      const hasDynamicFiles = yProjectFiles.size > 0;
+      const specContent = hasDynamicFiles ? (yProjectFiles.get('spec.md') || specRaw) : specRaw;
+      const designContent = hasDynamicFiles ? (yProjectFiles.get('design.md') || designRaw) : designRaw;
+
+      const docMetadata = {
+        ...extractMetadata(specContent),
+        ...extractMetadata(designContent)
+      };
+
+      const newNodes = Object.entries(docMetadata).map(([id, title]) => ({
+        id,
+        type: 'custom',
+        data: { label: `${id}: ${title}` },
+        position: { x: 0, y: 0 },
+      }));
+
+      const newEdges = mappingData.map((link, index) => ({
+        id: `e-doc-${index}`,
+        source: link.from,
+        target: link.to,
+        label: link.type,
+      }));
+
+      console.log('onImportDocTree: Data generated', { nodesCount: newNodes.length, edgesCount: newEdges.length });
+
+      // 1. 手元の状態を即座に更新（自動レイアウトを適用）
+      const layoutedNodes = isAutoLayout ? getLayoutedElements(newNodes, newEdges) : newNodes;
+      setNodes(layoutedNodes);
+      setEdges(newEdges);
+
+      // 全体が収まるように調整
+      setTimeout(() => fitView({ duration: 800, padding: 0.2 }), 100);
+
+      // 2. Yjsに共有
+      ydoc.transact(() => {
+        newNodes.forEach(node => yNodes.set(node.id, node));
+        newEdges.forEach(edge => yEdges.set(edge.id, edge));
+      }, 'local');
+
+      setIsAutoLayout(true);
+      console.log('onImportDocTree: Success');
+    } catch (error) {
+      console.error('onImportDocTree: Error occurred', error);
+    }
+  }, [yNodes, yEdges, setIsAutoLayout, setNodes, setEdges, isAutoLayout, fitView]);
+
   // ノードを追加する関数
   const onAddNode = useCallback(() => {
     const id = `node-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -253,6 +463,9 @@ function Flow() {
       const nodesArray = Array.from(yNodes.values());
       const edgesArray = Array.from(yEdges.values());
 
+      const metaName = yProjectMeta.get('name');
+      if (metaName) setProjectName(metaName);
+
       // 現在の選択状態を維持しながら同期する
       setNodes((currentNodes) => {
         const mergedNodes = nodesArray.map((yNode) => {
@@ -279,12 +492,14 @@ function Flow() {
 
     yNodes.observe(syncState);
     yEdges.observe(syncState);
+    yProjectMeta.observe(syncState);
 
     return () => {
       yNodes.unobserve(syncState);
       yEdges.unobserve(syncState);
+      yProjectMeta.unobserve(syncState);
     };
-  }, [yNodes, yEdges, setNodes, setEdges, isAutoLayout]);
+  }, [yNodes, yEdges, yProjectMeta, setNodes, setEdges, isAutoLayout]);
 
   return (
     <div style={{ width: '100%', height: '100vh', position: 'relative', overflow: 'hidden' }}>
@@ -295,6 +510,35 @@ function Flow() {
         }
         .react-flow__edge.selected marker path {
           fill: #ff0000 !important;
+        }
+        .btn-icon {
+          width: 40px;
+          height: 40px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          position: relative;
+        }
+        .btn-icon::after {
+          content: attr(data-tooltip);
+          position: absolute;
+          right: 50px;
+          background: #333;
+          color: #fff;
+          padding: 4px 8px;
+          border-radius: 4px;
+          font-size: 12px;
+          white-space: nowrap;
+          opacity: 0;
+          pointer-events: none;
+          transition: opacity 0.2s;
+        }
+        .btn-icon:hover::after {
+          opacity: 1;
+        }
+        .btn-icon svg {
+          width: 20px;
+          height: 20px;
         }
       `}</style>
       <ReactFlow
@@ -310,65 +554,93 @@ function Flow() {
       >
         <Background />
         <Controls />
-        <Panel position="top-right" style={{ display: 'flex', gap: '10px' }}>
+        <Panel position="top-left">
+          <div style={{ 
+            background: '#fff', 
+            padding: '8px 12px', 
+            borderRadius: '4px', 
+            border: '2px solid #1a192b',
+            boxShadow: '0 2px 5px rgba(0,0,0,0.1)'
+          }}>
+            <span style={{ fontSize: '10px', color: '#666', display: 'block', lineHeight: 1 }}>PROJECT</span>
+            <strong style={{ fontSize: '14px' }}>{projectName}</strong>
+          </div>
+        </Panel>
+
+        <Panel position="top-right" style={{ display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'flex-end' }}>
+          <label 
+            className="btn-icon" 
+            data-tooltip="プロジェクト・インポート"
+            style={{ backgroundColor: '#fff', border: '2px solid #4caf50', borderRadius: '4px', cursor: 'pointer', color: '#4caf50' }}
+          >
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+            <input type="file" accept=".zip" onChange={onImportProject} style={{ display: 'none' }} />
+          </label>
+
           <button 
-            onClick={() => setIsAutoLayout(!isAutoLayout)}
+            className="btn-icon" 
+            data-tooltip="プロジェクト・エクスポート"
+            onClick={onExportProject} 
+            style={{ backgroundColor: '#fff', border: '2px solid #4caf50', color: '#4caf50', borderRadius: '4px', cursor: 'pointer' }}
+          >
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M5 20h14v-2H5v2zM19 11l-7-7-7 7h4v6h6v-6h4z"/></svg>
+          </button>
+
+          <button 
+            className="btn-icon"
+            data-tooltip={isAutoLayout ? "自動レイアウト解除" : "自動レイアウト適用"}
+            onClick={() => {
+              if (isAutoLayout) {
+                // 自動レイアウトから手動レイアウトへ切り替える際、
+                // 現在の計算済み座標を Yjs に保存してレイアウトを維持する
+                console.log('Switching to manual: Persisting layout positions...');
+                ydoc.transact(() => {
+                  nodes.forEach((node) => {
+                    const yNode = yNodes.get(node.id);
+                    if (yNode) {
+                      yNodes.set(node.id, { ...yNode, position: node.position });
+                    }
+                  });
+                }, 'local');
+              }
+              setIsAutoLayout(!isAutoLayout);
+            }}
             style={{ 
-              padding: '10px 20px', 
-              cursor: 'pointer',
               backgroundColor: isAutoLayout ? '#1a192b' : '#fff',
               color: isAutoLayout ? '#fff' : '#1a192b',
               border: '2px solid #1a192b',
               borderRadius: '4px',
-              fontWeight: 'bold',
-              boxShadow: '0 2px 5px rgba(0,0,0,0.2)'
+              cursor: 'pointer'
             }}
           >
-            {isAutoLayout ? '自動レイアウト: ON' : '自動レイアウト: OFF'}
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M7.5 5.6L10 7L8.6 4.5L10 2L7.5 3.4L5 2L6.4 4.5L5 7L7.5 5.6ZM19.5 15.4L17 14L18.4 16.5L17 19L19.5 17.6L22 19L20.6 16.5L22 14L19.5 15.4ZM22 2L19.5 3.4L17 2L18.4 4.5L17 7L19.5 5.6L22 7L20.6 4.5L22 2ZM14.1 5.9L3 17L7 21L18.1 9.9L14.1 5.9ZM16.6 7.4L14.6 5.4L15.9 4.1L17.9 6.1L16.6 7.4Z"/></svg>
           </button>
+
           <button 
+            className="btn-icon"
+            data-tooltip="ノードを追加"
             onClick={onAddNode} 
-            style={{ 
-              padding: '10px 20px', 
-              cursor: 'pointer',
-              backgroundColor: '#fff',
-              border: '2px solid #1a192b',
-              borderRadius: '4px',
-              fontWeight: 'bold',
-              boxShadow: '0 2px 5px rgba(0,0,0,0.2)'
-            }}
+            style={{ backgroundColor: '#fff', border: '2px solid #1a192b', borderRadius: '4px', cursor: 'pointer' }}
           >
-            ＋ ノードを追加
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 13h-6v6-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
           </button>
+
           <button 
+            className="btn-icon"
+            data-tooltip="選択要素を削除"
             onClick={onDeleteSelected} 
-            style={{ 
-              padding: '10px 20px', 
-              cursor: 'pointer',
-              backgroundColor: '#fff',
-              border: '2px solid #ff9800',
-              color: '#ff9800',
-              borderRadius: '4px',
-              fontWeight: 'bold',
-              boxShadow: '0 2px 5px rgba(0,0,0,0.2)'
-            }}
+            style={{ backgroundColor: '#fff', border: '2px solid #ff9800', color: '#ff9800', borderRadius: '4px', cursor: 'pointer' }}
           >
-            選択削除
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
           </button>
+
           <button 
+            className="btn-icon"
+            data-tooltip="全リセット"
             onClick={onReset} 
-            style={{ 
-              padding: '10px 20px', 
-              cursor: 'pointer',
-              backgroundColor: '#fff',
-              border: '2px solid #f44336',
-              color: '#f44336',
-              borderRadius: '4px',
-              fontWeight: 'bold',
-              boxShadow: '0 2px 5px rgba(0,0,0,0.2)'
-            }}
+            style={{ backgroundColor: '#fff', border: '2px solid #f44336', color: '#f44336', borderRadius: '4px', cursor: 'pointer' }}
           >
-            リセット
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
           </button>
         </Panel>
       </ReactFlow>

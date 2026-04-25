@@ -4,5 +4,10 @@
   { "from": "S-003", "to": "D-003", "type": "realizes" },
   { "from": "S-004", "to": "D-004", "type": "realizes" },
   { "from": "S-005", "to": "D-005", "type": "realizes" },
-  { "from": "S-006", "to": "D-006", "type": "realizes" }
+  { "from": "S-006", "to": "D-006", "type": "realizes" },
+  { "from": "S-007", "to": "D-007", "type": "realizes" },
+  { "from": "S-008", "to": "D-008", "type": "realizes" },
+  { "from": "S-009", "to": "D-009", "type": "realizes" },
+  { "from": "S-010", "to": "D-010", "type": "realizes" },
+  { "from": "S-011", "to": "D-011", "type": "realizes" }
 ]
