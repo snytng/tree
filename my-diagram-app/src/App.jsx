@@ -8,6 +8,9 @@ import ReactFlow, {
   useNodesState,
   useEdgesState,
   Panel,
+  MarkerType, // MarkerTypeをインポート
+  Handle,
+  Position,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import * as Y from 'yjs';
@@ -22,12 +25,39 @@ const provider = new WebrtcProvider('react-flow-demo-room', ydoc);
 // ローカルストレージ（IndexedDB）への永続化
 const indexeddb = new IndexeddbPersistence(ROOM_NAME, ydoc);
 
+// 左右にハンドルを持つカスタムノードの定義
+const CustomNode = ({ data }) => {
+  return (
+    <div style={{ padding: '10px', borderRadius: '5px', background: '#fff', border: '1px solid #1a192b', minWidth: '100px', textAlign: 'center' }}>
+      <Handle type="target" position={Position.Left} style={{ borderRadius: 0 }} />
+      <div>{data.label}</div>
+      <Handle type="source" position={Position.Right} style={{ borderRadius: 0 }} />
+    </div>
+  );
+};
+
+// nodeTypesはコンポーネントの外で定義するか、memo化する必要があります
+const nodeTypes = {
+  custom: CustomNode,
+  default: CustomNode, // デフォルトのノードタイプも左右ハンドルに設定
+};
+
 const initialNodes = [];
 const initialEdges = [];
 
 export default function App() {
   const [nodes, setNodes, onNodesChangeState] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChangeState] = useEdgesState(initialEdges);
+
+  // デフォルトのエッジオプションを定義
+  const defaultEdgeOptions = useMemo(() => ({
+    animated: false, // 必要であればアニメーションを有効に
+    style: { strokeWidth: 2, stroke: '#333' }, // エッジのスタイル
+    markerEnd: {
+      type: MarkerType.ArrowClosed, // 終端を閉じた矢印にする
+      color: '#333', // 矢印の色
+    },
+  }), []);
 
   // Yjsの共有型（Map）を取得。IDをキーにすることで、個別の要素を効率的に同期できる
   const yNodes = ydoc.getMap('nodes');
@@ -98,6 +128,7 @@ export default function App() {
     const id = `node-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     const newNode = {
       id,
+      type: 'custom', // 作成したカスタムノードを使用
       data: { label: `Node ${yNodes.size + 1}` },
       position: { x: Math.random() * 400, y: Math.random() * 400 },
     };
@@ -157,6 +188,8 @@ export default function App() {
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
+        nodeTypes={nodeTypes} // カスタムノードを登録
+        defaultEdgeOptions={defaultEdgeOptions} // ここでデフォルトのエッジオプションを適用
         fitView
       >
         <Background />
