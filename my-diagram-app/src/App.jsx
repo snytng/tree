@@ -147,27 +147,17 @@ function Flow() {
   const [projectName, setProjectName] = useState('New Project');
   const [lastAddedNodeId, setLastAddedNodeId] = useState(null);
 
-  /**
-   * [PROVISIONAL MEASURE / RISK WARNING]
-   * 以下の 'pendingSelectionIdRef' および DOM フォーカスの強制移動は、
-   * React Flow 内部の選択ロジックと Yjs 同期が競合し、新規ノード追加時に
-   * フォーカスが古いノードに吸い寄せられる現象を回避するための暫定措置です。
-   * 
-   * リスク:
-   * - ブラウザのイベントループの混雑状況により、フォーカス移動が追いつかない可能性があります。
-   * - React Flow の仕様変更により、内部イベントの順序が変わると機能しなくなる恐れがあります。
-   * 
-   * 設計方針: Yjs を唯一の真実の源とし、React ステートは Yjs の観測結果 (syncState) に従います。
-   */
+  // nodeTypesをコンポーネント内でmemo化して参照を安定させる
+  const nodeTypes = useMemo(() => ({
+    custom: CustomNode,
+    default: CustomNode,
+  }), []);
 
   // 最新の状態を常に参照するためのRef (クロージャ問題と連打対策)
   const nodesRef = React.useRef(nodes);
   const edgesRef = React.useRef(edges);
   useEffect(() => { nodesRef.current = nodes; }, [nodes]);
   useEffect(() => { edgesRef.current = edges; }, [edges]);
-
-  // 同期中の選択状態を保護するためのRef
-  const pendingSelectionIdRef = React.useRef(null);
 
   const { setCenter, getViewport, fitView } = useReactFlow();
 
@@ -216,39 +206,18 @@ function Flow() {
   // React Flowの変更をYjsに反映させるハンドラー
   const onNodesChange = useCallback(
     (changes) => {
-      const pendingId = pendingSelectionIdRef.current;
-      
-      // React Flow 内部からの勝手な選択変更を完全にガードする
-      const filteredChanges = changes.map(change => {
-        if (change.type === 'select' && pendingId) {
-          // ガード対象ID以外が選択されようとしたら阻止
-          if (change.id !== pendingId && change.selected === true) {
-            return { ...change, selected: false };
-          }
-          // ガード対象IDの選択を解除しようとしたら阻止
-          if (change.id === pendingId && change.selected === false) {
-            return { ...change, selected: true };
-          }
-        }
-        return change;
-      });
-
-      // ガードされた変更をステートに適用
-      onNodesChangeState(filteredChanges);
-
-      // Yjs に反映する変更を抽出
-      const changesToApplyToYjs = filteredChanges.filter(c => {
-        if (c.type === 'select' && pendingId && c.id !== pendingId) return false;
-        return true;
-      });
+      // React Flow内部の状態を更新
+      onNodesChangeState(changes);
 
       ydoc.transact(() => {
-        changesToApplyToYjs.forEach((change) => {
+        changes.forEach((change) => {
           if (change.type === 'remove') {
             yNodes.delete(change.id);
           } else if (change.type === 'select') {
             const node = yNodes.get(change.id);
-            if (node) yNodes.set(change.id, { ...node, selected: change.selected });
+            if (node && node.selected !== change.selected) {
+              yNodes.set(change.id, { ...node, selected: change.selected });
+            }
           } else if (!isAutoLayout && (change.type === 'position' || change.type === 'dimensions')) {
             const node = yNodes.get(change.id);
             if (node) {
@@ -543,6 +512,11 @@ function Flow() {
 
   // ノードを追加する関数
   const onAddNode = useCallback(() => {
+    // フォーカス競合を防ぐため、現在の入力要素やノードからフォーカスを外す
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+
     const id = `node-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     console.log(`[Action] Adding normal node: ${id}`);
     const label = `Node ${yNodes.size + 1}`;
@@ -554,29 +528,26 @@ function Flow() {
       selected: true,
     };
 
+    // 即座にローカルステートに反映（syncStateがlocal originを無視するため必要）
     const nextNodes = nodesRef.current.map(n => ({ ...n, selected: false })).concat(newNode);
     const nextEdges = edgesRef.current.map(e => ({ ...e, selected: false }));
     const finalNodes = isAutoLayout ? getLayoutedElements(nextNodes, nextEdges) : nextNodes;
 
     setNodes(finalNodes);
     setEdges(nextEdges);
-    
-    // Refを即座に更新
     nodesRef.current = finalNodes;
     edgesRef.current = nextEdges;
 
-    pendingSelectionIdRef.current = id;
-    setLastAddedNodeId(id); // 移動対象としてIDを記録
-
-    const { selected: _, ...nodeToStore } = newNode;
     ydoc.transact(() => {
-      yNodes.set(id, nodeToStore);
-      // 他ノードの選択解除を共有
+      yNodes.set(id, newNode);
       yNodes.forEach((node, nodeId) => {
         if (nodeId !== id && node.selected) yNodes.set(nodeId, { ...node, selected: false });
       });
+      yEdges.forEach((edge, edgeId) => { if (edge.selected) yEdges.set(edgeId, { ...edge, selected: false }); });
     }, 'local');
-  }, [yNodes, setNodes, setEdges, setLastAddedNodeId, isAutoLayout]);
+
+    setLastAddedNodeId(id);
+  }, [yNodes, yEdges, setLastAddedNodeId, isAutoLayout, setNodes, setEdges]);
 
   // レイアウトデバッグ情報をクリップボードにコピーする関数
   const onCopyDebugInfo = useCallback(() => {
@@ -592,6 +563,11 @@ function Flow() {
   }, [isAutoLayout, projectName]);
 
   const onAddStructuredNode = useCallback((mode) => {
+    // フォーカス競合を防ぐ
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+
     // Refから最新の状態を取得し、連打時も正確なベースノードを特定する
     const currentNodes = nodesRef.current;
     const currentEdges = edgesRef.current;
@@ -621,10 +597,7 @@ function Flow() {
     };
     const newEdge = parentId ? { id: edgeId, source: parentId, target: nodeId } : null;
 
-    // ガードフラグを立てる
-    pendingSelectionIdRef.current = nodeId;
-
-    // ローカルステートを即座に更新してフォーカスを確定させる
+    // 即座にローカルステートに反映
     const nextNodes = currentNodes.map(n => ({ ...n, selected: false })).concat(newNode);
     const nextEdges = newEdge 
       ? addEdge(newEdge, currentEdges.map(e => ({ ...e, selected: false })))
@@ -636,9 +609,8 @@ function Flow() {
     nodesRef.current = finalNodes;
     edgesRef.current = nextEdges;
 
-    const { selected: _, ...nodeToStore } = newNode;
     ydoc.transact(() => {
-      yNodes.set(nodeId, nodeToStore);
+      yNodes.set(nodeId, newNode);
       if (newEdge) yEdges.set(edgeId, newEdge);
       yNodes.forEach((node, id) => {
         if (id !== nodeId && node.selected) yNodes.set(id, { ...node, selected: false });
@@ -647,7 +619,7 @@ function Flow() {
     }, 'local');
 
     setLastAddedNodeId(nodeId);
-  }, [yNodes, yEdges, isAutoLayout, setNodes, setEdges, setLastAddedNodeId]);
+  }, [yNodes, yEdges, setLastAddedNodeId, isAutoLayout, setNodes, setEdges]);
 
   // キーボードショートカットの制御
   useEffect(() => {
@@ -708,32 +680,17 @@ function Flow() {
       const metaName = yProjectMeta.get('name');
       if (metaName) setProjectName(metaName);
 
-      // 現在の選択状態を維持しながら同期する
+      // Yjs側のデータを正としてReactステートを更新する
       setNodes((currentNodes) => {
-        const pendingId = pendingSelectionIdRef.current;
         const mergedNodes = nodesArray.map((yNode) => {
-          const localNode = currentNodes.find((n) => n.id === yNode.id);
-          
-          // 同期時も、追加直後のノードなら選択を強制維持。そうでなければローカル状態を引き継ぐ。
-          const shouldBeSelected = pendingId ? (yNode.id === pendingId) : !!localNode?.selected;
-          return { ...yNode, selected: shouldBeSelected };
+          // 選択状態もYjsから直接受け取る（真実の源を統一）
+          return { ...yNode, selected: !!yNode.selected };
         });
 
         return isAutoLayout && mergedNodes.length > 0
           ? getLayoutedElements(mergedNodes, edgesArray)
           : mergedNodes;
       });
-      
-      // Yjs同期が完了した時点でガードの必要性をチェック
-      const pId = pendingSelectionIdRef.current;
-      if (pId && nodesArray.some(n => n.id === pId && n.selected)) {
-        // ガード解除をスケジュール。React Flowのイベントループが落ち着くまで長めの猶予を持たせる。
-        setTimeout(() => { 
-          if (pendingSelectionIdRef.current === pId) {
-            pendingSelectionIdRef.current = null; 
-          }
-        }, 800);
-      }
 
       setEdges((currentEdges) => {
         const nextEdges = edgesArray.map((yEdge) => {
@@ -757,14 +714,6 @@ function Flow() {
       yProjectMeta.unobserve(syncState);
     };
   }, [yNodes, yEdges, yProjectMeta, setNodes, setEdges, isAutoLayout]);
-
-  // 背景クリックでガードを強制解除 (pendingIdが設定されている場合のみ)
-  const onPaneClick = useCallback(() => {
-    if (pendingSelectionIdRef.current) {
-      console.log(`[Action] Pane clicked: Clearing guard for ${pendingSelectionIdRef.current}`);
-      pendingSelectionIdRef.current = null;
-    }
-  }, []);
 
   return (
     <div style={{ width: '100%', height: '100vh', position: 'relative', overflow: 'hidden' }}>
@@ -826,7 +775,6 @@ function Flow() {
         onConnect={onConnect}
         nodeTypes={nodeTypes}
         defaultEdgeOptions={defaultEdgeOptions}
-        onPaneClick={onPaneClick}
         nodesDraggable={!isAutoLayout}
         fitView
       >
