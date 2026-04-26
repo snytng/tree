@@ -16,3 +16,6 @@ npm-debug.log*
 # OSシステムファイル
 .DS_Store
 Thumbs.db
+
+#zipファイル
+*.zip
