@@ -5,7 +5,7 @@ import { useReactFlow } from 'reactflow';
  * [D-014] キーボードナビゲーションを実現するためのフック
  * 矢印キーで視覚的に最も近いノードへフォーカスを移動する
  */
-export const useKeyboardNavigation = (ydoc, nodes, setNodes) => {
+export const useKeyboardNavigation = (ydoc, nodes, edges, setNodes) => {
   const { setCenter } = useReactFlow();
 
   useEffect(() => {
@@ -16,6 +16,47 @@ export const useKeyboardNavigation = (ydoc, nodes, setNodes) => {
       // 現在選択されているノードを1つ取得
       const currentNode = nodes.find((n) => n.selected);
       if (!currentNode) return;
+
+      // [D-016] Ctrl + 上下による兄弟の順序入れ替え
+      if (event.ctrlKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+        event.preventDefault();
+        const parentEdge = edges.find(e => e.target === currentNode.id);
+        if (!parentEdge) return; // 親がいない（ルート）場合は現状スキップ
+
+        const siblingIds = edges
+          .filter(e => e.source === parentEdge.source)
+          .map(e => e.target);
+
+        const siblings = nodes
+          .filter(n => siblingIds.includes(n.id))
+          .sort((a, b) => a.position.y - b.position.y);
+
+        const currentIndex = siblings.findIndex(s => s.id === currentNode.id);
+        let targetSibling = null;
+
+        if (event.key === 'ArrowUp' && currentIndex > 0) {
+          targetSibling = siblings[currentIndex - 1];
+        } else if (event.key === 'ArrowDown' && currentIndex < siblings.length - 1) {
+          targetSibling = siblings[currentIndex + 1];
+        }
+
+        if (targetSibling) {
+          const yNodes = ydoc.getMap('nodes');
+          ydoc.transact(() => {
+            const currentData = yNodes.get(currentNode.id);
+            const targetData = yNodes.get(targetSibling.id);
+            if (currentData && targetData) {
+              // Y座標を入れ替えることで自動レイアウトの順序を変える
+              const tempY = currentData.position.y;
+              yNodes.set(currentNode.id, { ...currentData, position: { ...currentData.position, y: targetData.position.y } });
+              yNodes.set(targetSibling.id, { ...targetData, position: { ...targetData.position, y: tempY } });
+            }
+          }, 'structural'); // [D-016] 構造変更を示すオリジンを付与
+        }
+        return;
+      }
+
+      if (event.ctrlKey) return; // その他のCtrl操作は通常ナビゲーションをスキップ
 
       const yNodes = ydoc.getMap('nodes');
       let bestNode = null;
@@ -91,5 +132,5 @@ export const useKeyboardNavigation = (ydoc, nodes, setNodes) => {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [nodes, ydoc, setNodes, setCenter]);
+  }, [nodes, edges, ydoc, setNodes, setCenter]);
 };

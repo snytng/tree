@@ -30,7 +30,7 @@ const ROOM_NAME = 'react-flow-demo-room';
 // Yjsドキュメントの初期化
 const ydoc = new Y.Doc();
 // 部屋名 'react-flow-demo-room' でWebRTCプロバイダーを設定
-const provider = new WebrtcProvider('react-flow-demo-room', ydoc);
+const provider = new WebrtcProvider(ROOM_NAME, ydoc);
 // ローカルストレージ（IndexedDB）への永続化
 const indexeddb = new IndexeddbPersistence(ROOM_NAME, ydoc);
 
@@ -153,7 +153,7 @@ function Flow() {
   const [lastAddedNodeId, setLastAddedNodeId] = useState(null);
 
   // [D-014] キーボードナビゲーションを有効化
-  useKeyboardNavigation(ydoc, nodes, setNodes);
+  useKeyboardNavigation(ydoc, nodes, edges, setNodes);
 
   // nodeTypesをコンポーネント内でmemo化して参照を安定させる
   const nodeTypes = useMemo(() => ({
@@ -187,7 +187,7 @@ function Flow() {
 
   // UndoManagerの設定
   const undoManager = useMemo(() => new Y.UndoManager([yNodes, yEdges], {
-    trackedOrigins: new Set(['local'])
+    trackedOrigins: new Set(['local', 'structural']) // structuralオリジンの変更もUndo対象に含める
   }), [yNodes, yEdges]);
 
   const [canUndo, setCanUndo] = useState(false);
@@ -680,6 +680,7 @@ function Flow() {
   // Yjs側からの変更を監視してReactの状態に反映
   useEffect(() => {
     const syncState = (event) => {
+      // [D-016] structuralオリジンの場合は、自分自身の変更であっても再レイアウトを走らせる
       if (event && event.transaction.origin === 'local') return;
       
       const nodesArray = Array.from(yNodes.values());
