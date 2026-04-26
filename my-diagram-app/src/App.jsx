@@ -18,6 +18,7 @@ import 'reactflow/dist/style.css';
 import * as Y from 'yjs';
 import { WebrtcProvider } from 'y-webrtc';
 import { IndexeddbPersistence } from 'y-indexeddb';
+import { useKeyboardNavigation } from './hooks/useKeyboardNavigation';
 import dagre from 'dagre';
 import mappingData from '../mapping.json';
 import JSZip from 'jszip';
@@ -37,10 +38,12 @@ const indexeddb = new IndexeddbPersistence(ROOM_NAME, ydoc);
 const CustomNode = ({ data, selected }) => {
   return (
     <div style={{ 
-      padding: '12px 16px', borderRadius: '8px', background: '#fff',
+      borderRadius: '8px', background: '#fff',
       border: selected ? '2px solid #ff4444' : '1px solid #e2e8f0',
-      minWidth: '120px', textAlign: 'center',
-      boxShadow: selected ? '0 0 15px rgba(255, 68, 68, 0.2)' : '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
+      width: '180px',
+      height: '60px',
+      display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center',
+      boxShadow: selected ? '0 0 15px rgba(255, 68, 68, 0.4)' : '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
       transition: 'all 0.2s ease', position: 'relative'
     }}>
       <Handle type="target" position={Position.Left} style={{ borderRadius: 0 }} />
@@ -77,8 +80,10 @@ const getLayoutedElements = (nodes, edges) => {
   const finalNodePositions = {};
   const processedNodes = new Set();
   let currentYOffset = 0;
-  const verticalGap = 40;
-  const horizontalStep = 250;
+  const verticalGap = 20;
+  const horizontalStep = 300; // ノード間隔を広げて視認性を向上
+  const nodeWidth = 180;
+  const nodeHeight = 60;
 
   // 再帰的にサブツリーをレイアウトし、その「箱」の総高さを返す関数
   const layoutSubtree = (nodeId, x, y) => {
@@ -105,9 +110,9 @@ const getLayoutedElements = (nodes, edges) => {
       childrenBoxHeight -= verticalGap; // 最後の余白を削除
     }
 
-    const myHeight = Math.max(50, childrenBoxHeight);
+    const myHeight = Math.max(nodeHeight, childrenBoxHeight);
     // 親を子たちの垂直方向の中央に配置
-    const myY = y + (myHeight / 2) - 25;
+    const myY = y + (myHeight / 2) - (nodeHeight / 2);
 
     finalNodePositions[nodeId] = { x, y: myY };
     return { height: myHeight };
@@ -146,6 +151,9 @@ function Flow() {
   const [isAutoLayout, setIsAutoLayout] = useState(true);
   const [projectName, setProjectName] = useState('New Project');
   const [lastAddedNodeId, setLastAddedNodeId] = useState(null);
+
+  // [D-014] キーボードナビゲーションを有効化
+  useKeyboardNavigation(ydoc, nodes, setNodes);
 
   // nodeTypesをコンポーネント内でmemo化して参照を安定させる
   const nodeTypes = useMemo(() => ({
@@ -288,9 +296,9 @@ function Flow() {
     if (lastAddedNodeId) {
       const node = nodesRef.current.find((n) => n.id === lastAddedNodeId);
       if (node) {
-        // ノードのサイズ(150x50)の半分を足して中心座標を計算
-        const centerX = node.position.x + 75;
-        const centerY = node.position.y + 25;
+        // 固定サイズ(180x60)の中心座標を計算
+        const centerX = node.position.x + 90;
+        const centerY = node.position.y + 30;
 
         // DOM要素に直接フォーカスを当てる（React Flowの内部選択を安定させる）
         const element = document.querySelector(`[data-id="${lastAddedNodeId}"]`);

@@ -11,5 +11,7 @@
   { "from": "S-010", "to": "D-010", "type": "realizes" },
   { "from": "S-011", "to": "D-011", "type": "realizes" },
   { "from": "S-012", "to": "D-012", "type": "realizes" },
-  { "from": "S-013", "to": "D-013", "type": "realizes" }
+  { "from": "S-013", "to": "D-013", "type": "realizes" },
+  { "from": "S-014", "to": "D-014", "type": "realizes" },
+  { "from": "S-015", "to": "D-015", "type": "realizes" }
 ]
