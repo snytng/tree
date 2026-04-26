@@ -327,7 +327,7 @@ function Flow() {
           yEdges.delete(edge.id);
         }
       });
-    }, 'local');
+    }, 'structural');
   }, [yNodes, yEdges]);
 
   // MarkdownからIDとタイトルを抽出するヘルパー
