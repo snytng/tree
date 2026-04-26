@@ -217,6 +217,7 @@ function Flow() {
       // React Flow内部の状態を更新
       onNodesChangeState(changes);
 
+      const hasStructuralChange = changes.some(c => c.type === 'remove');
       ydoc.transact(() => {
         changes.forEach((change) => {
           if (change.type === 'remove') {
@@ -239,7 +240,7 @@ function Flow() {
             }
           }
         });
-      }, 'local');
+      }, hasStructuralChange ? 'structural' : 'local');
     },
     [onNodesChangeState, yNodes, isAutoLayout] // setNodesを除去
   );
@@ -247,6 +248,7 @@ function Flow() {
   const onEdgesChange = useCallback(
     (changes) => {
       onEdgesChangeState(changes);
+      const hasStructuralChange = changes.some(c => c.type === 'remove');
       ydoc.transact(() => {
         changes.forEach((change) => {
           if (change.type === 'remove') {
@@ -256,7 +258,7 @@ function Flow() {
             if (edge) yEdges.set(change.id, { ...edge, selected: change.selected });
           }
         });
-      }, 'local');
+      }, hasStructuralChange ? 'structural' : 'local');
     },
     [onEdgesChangeState, yEdges]
   );
@@ -286,7 +288,7 @@ function Flow() {
         yEdges.forEach((edge, id) => {
           if (edge.selected) yEdges.set(id, { ...edge, selected: false });
         });
-      }, 'local');
+      }, 'structural');
     },
     [yNodes, yEdges, isAutoLayout, setNodes, setEdges]
   );
@@ -552,7 +554,7 @@ function Flow() {
         if (nodeId !== id && node.selected) yNodes.set(nodeId, { ...node, selected: false });
       });
       yEdges.forEach((edge, edgeId) => { if (edge.selected) yEdges.set(edgeId, { ...edge, selected: false }); });
-    }, 'local');
+    }, 'structural');
 
     setLastAddedNodeId(id);
   }, [yNodes, yEdges, setLastAddedNodeId, isAutoLayout, setNodes, setEdges]);
@@ -624,7 +626,7 @@ function Flow() {
         if (id !== nodeId && node.selected) yNodes.set(id, { ...node, selected: false });
       });
       yEdges.forEach((edge, id) => { if (edge.selected) yEdges.set(id, { ...edge, selected: false }); });
-    }, 'local');
+    }, 'structural');
 
     setLastAddedNodeId(nodeId);
   }, [yNodes, yEdges, setLastAddedNodeId, isAutoLayout, setNodes, setEdges]);

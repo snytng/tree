@@ -55,3 +55,7 @@ Vite + React + React Flowで、ノード（四角）とエッジ（線）を動�
 
 ### 2.5 バグ修正 (2024-XX-XX)
 - **ノード削除の即時反映修正 [D-018]**: `onDeleteSelected` のトランザクションオリジンを `'local'` から `'structural'` に変更し、自分自身の削除操作が即座に UI に反映されない問題を修正。
+- **同期オリジンの統一調整**:
+    - `onConnect`、`onAddNode`、`onAddStructuredNode` のオリジンを `'structural'` に変更。
+    - `onNodesChange` / `onEdgesChange` において、要素の削除が含まれる場合のみ自動的に `'structural'` オリジンを使用するようロジックを追加。
+    - これにより、構造変更を伴う全操作で `syncState` による再レイアウトが確実に行われるよう改善。
