@@ -647,6 +647,55 @@ function Flow() {
     const sharedNodes = Array.from(yNodes.values());
     const sharedEdges = Array.from(yEdges.values());
 
+    if (mode === 'parent') {
+      const incomingEdges = sharedEdges.filter(e => e.target === selectedNode.id);
+      const newNode = {
+        id: nodeId,
+        type: 'custom',
+        data: { label: 'Parent Node' },
+        position: { x: selectedNode.position.x - 250, y: selectedNode.position.y },
+        selected: true,
+      };
+
+      const edgesToAdd = [];
+      if (incomingEdges.length > 0) {
+        incomingEdges.forEach((edge, idx) => {
+          edgesToAdd.push({ id: `${edgeId}-p-${idx}`, source: edge.source, target: nodeId });
+          edgesToAdd.push({ id: `${edgeId}-c-${idx}`, source: nodeId, target: selectedNode.id });
+        });
+      } else {
+        edgesToAdd.push({ id: edgeId, source: nodeId, target: selectedNode.id });
+      }
+
+      const nextNodes = currentNodes.map(n => ({ ...n, selected: false })).concat(newNode);
+      const nextEdges = currentEdges
+        .filter(e => !incomingEdges.some(ie => ie.id === e.id))
+        .map(e => ({ ...e, selected: false }))
+        .concat(edgesToAdd);
+
+      const finalNodes = isAutoLayout ? getLayoutedElements(nextNodes, nextEdges) : nextNodes;
+      setNodes(finalNodes);
+      setEdges(nextEdges);
+      nodesRef.current = finalNodes;
+      edgesRef.current = nextEdges;
+
+      ydoc.transact(() => {
+        yNodes.set(nodeId, newNode);
+        edgesToAdd.forEach(e => yEdges.set(e.id, e));
+        incomingEdges.forEach(e => yEdges.delete(e.id));
+        
+        yNodes.forEach((node, id) => {
+          if (id !== nodeId && node.selected) yNodes.set(id, { ...node, selected: false });
+        });
+        yEdges.forEach((edge, id) => {
+          if (edge.selected) yEdges.set(id, { ...edge, selected: false });
+        });
+      }, 'structural');
+
+      setLastAddedNodeId(nodeId);
+      return;
+    }
+
     let parentId = null;
     if (mode === 'sibling' || mode === 'sibling-above') {
       const incomingEdge = sharedEdges.find(e => e.target === selectedNode.id);
@@ -747,7 +796,11 @@ function Flow() {
       // 子ノード追加: Insert
       if (e.key === 'Insert') {
         e.preventDefault();
-        onAddStructuredNode('child');
+        if (e.shiftKey) {
+          onAddStructuredNode('parent');
+        } else {
+          onAddStructuredNode('child');
+        }
       }
       // 兄弟ノード追加: Enter (下) / Shift + Enter (上)
       if (e.key === 'Enter') {
