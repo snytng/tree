@@ -72,7 +72,10 @@ const getLayoutedElements = (nodes, edges) => {
     childrenIds.sort((a, b) => {
       const nodeA = nodes.find(n => n.id === a);
       const nodeB = nodes.find(n => n.id === b);
-      return (nodeA?.position?.y || 0) - (nodeB?.position?.y || 0);
+      const yA = nodeA?.position?.y || 0;
+      const yB = nodeB?.position?.y || 0;
+      if (yA !== yB) return yA - yB;
+      return a.localeCompare(b); // [D-004] IDによる安定ソート
     });
 
     let childrenBoxHeight = 0;
@@ -98,7 +101,10 @@ const getLayoutedElements = (nodes, edges) => {
   // 1. ルートノードを現在の物理順序（y座標）でソート
   const roots = nodes
     .filter(n => inDegree[n.id] === 0)
-    .sort((a, b) => a.position.y - b.position.y);
+    .sort((a, b) => {
+      if (a.position.y !== b.position.y) return a.position.y - b.position.y;
+      return a.id.localeCompare(b.id); // [D-004] IDによる安定ソート
+    });
 
   roots.forEach(root => {
     const { height } = layoutSubtree(root.id, 0, currentYOffset);
@@ -472,11 +478,11 @@ function Flow() {
       console.log('3. Extracted IDs:', Object.keys(allMetadata));
       console.log('4. Mapping entries:', importedMapping.length);
 
-      const newNodes = Object.entries(allMetadata).map(([id, title]) => ({
+      const newNodes = Object.entries(allMetadata).map(([id, title], idx) => ({
         id,
         type: 'custom',
         data: { label: `[${id}] ${title}` },
-        position: { x: 0, y: 0 },
+        position: { x: 0, y: idx * 10 }, // [D-004] 初期順序を座標で付与
       }));
 
       const newEdges = importedMapping.map((link, idx) => ({
@@ -530,11 +536,11 @@ function Flow() {
         ...extractMetadata(designContent)
       };
 
-      const newNodes = Object.entries(docMetadata).map(([id, title]) => ({
+      const newNodes = Object.entries(docMetadata).map(([id, title], idx) => ({
         id,
         type: 'custom',
         data: { label: `[${id}] ${title}` },
-        position: { x: 0, y: 0 },
+        position: { x: 0, y: idx * 10 }, // [D-004] 初期順序を座標で付与
       }));
 
       const newEdges = mappingData.map((link, index) => ({
@@ -571,12 +577,16 @@ function Flow() {
 
     const id = `node-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     console.log(`[Action] Adding normal node: ${id}`);
+
+    // [D-004] 現在のノードの中で最大の Y 座標を取得して、そのさらに下に配置する
+    const maxY = nodesRef.current.reduce((max, n) => Math.max(max, n.position.y), 0);
+    
     const label = `Node ${yNodes.size + 1}`;
     const newNode = {
       id,
       type: 'custom',
       data: { label },
-      position: { x: Math.random() * 400, y: Math.random() * 400 },
+      position: { x: 0, y: maxY + 10 }, 
       selected: true,
     };
 
@@ -632,19 +642,55 @@ function Flow() {
     const nodeId = `node-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     const edgeId = `edge-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     
+    const yNodes = ydoc.getMap('nodes');
+    const yEdges = ydoc.getMap('edges');
+    const sharedNodes = Array.from(yNodes.values());
+    const sharedEdges = Array.from(yEdges.values());
+
     let parentId = null;
     if (mode === 'sibling') {
-      const incomingEdge = currentEdges.find(e => e.target === selectedNode.id);
+      const incomingEdge = sharedEdges.find(e => e.target === selectedNode.id);
       parentId = incomingEdge ? incomingEdge.source : null;
     } else {
       parentId = selectedNode.id;
+    }
+
+    // [D-004] 挿入位置の計算: 兄弟リストを取得して論理的な中間座標を決定する
+    let siblings = [];
+    if (parentId) {
+      const siblingIds = sharedEdges.filter(e => e.source === parentId).map(e => e.target);
+      siblings = sharedNodes.filter(n => siblingIds.includes(n.id));
+    } else {
+      const targetIds = new Set(sharedEdges.map(e => e.target));
+      siblings = sharedNodes.filter(n => !targetIds.has(n.id));
+    }
+
+    siblings.sort((a, b) => (a.position?.y || 0) - (b.position?.y || 0));
+    const currentIndex = siblings.findIndex(n => n.id === selectedNode.id);
+    const currentSharedY = yNodes.get(selectedNode.id)?.position?.y || 0;
+    
+    let targetY;
+    if (mode === 'child') {
+      // 子ノード追加時は末尾に追加
+      const childIds = sharedEdges.filter(e => e.source === selectedNode.id).map(e => e.target);
+      const children = sharedNodes.filter(n => childIds.includes(n.id));
+      const maxChildY = children.reduce((max, n) => Math.max(max, n.position?.y || 0), 0);
+      targetY = maxChildY + 10;
+    } else {
+      // 兄弟ノード追加時: 選択ノードの「次」があればその中間、なければ +10
+      if (currentIndex !== -1 && currentIndex < siblings.length - 1) {
+        const nextY = siblings[currentIndex + 1].position?.y || 0;
+        targetY = (currentSharedY + nextY) / 2;
+      } else {
+        targetY = currentSharedY + 10;
+      }
     }
 
     const newNode = {
       id: nodeId,
       type: 'custom',
       data: { label: `${mode === 'child' ? 'Child' : 'Sibling'} Node` },
-      position: { x: selectedNode.position.x + 200, y: selectedNode.position.y },
+      position: { x: selectedNode.position.x + 200, y: targetY },
       selected: true,
     };
     const newEdge = parentId ? { id: edgeId, source: parentId, target: nodeId } : null;
