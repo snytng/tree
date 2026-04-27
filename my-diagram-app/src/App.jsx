@@ -648,7 +648,7 @@ function Flow() {
     const sharedEdges = Array.from(yEdges.values());
 
     let parentId = null;
-    if (mode === 'sibling') {
+    if (mode === 'sibling' || mode === 'sibling-above') {
       const incomingEdge = sharedEdges.find(e => e.target === selectedNode.id);
       parentId = incomingEdge ? incomingEdge.source : null;
     } else {
@@ -676,6 +676,14 @@ function Flow() {
       const children = sharedNodes.filter(n => childIds.includes(n.id));
       const maxChildY = children.reduce((max, n) => Math.max(max, n.position?.y || 0), 0);
       targetY = maxChildY + 10;
+    } else if (mode === 'sibling-above') {
+      // 兄弟ノード（上）追加時
+      if (currentIndex > 0) {
+        const prevY = siblings[currentIndex - 1].position?.y || 0;
+        targetY = (prevY + currentSharedY) / 2;
+      } else {
+        targetY = currentSharedY - 10;
+      }
     } else {
       // 兄弟ノード追加時: 選択ノードの「次」があればその中間、なければ +10
       if (currentIndex !== -1 && currentIndex < siblings.length - 1) {
@@ -741,10 +749,14 @@ function Flow() {
         e.preventDefault();
         onAddStructuredNode('child');
       }
-      // 兄弟ノード追加: Enter
+      // 兄弟ノード追加: Enter (下) / Shift + Enter (上)
       if (e.key === 'Enter') {
         e.preventDefault();
-        onAddStructuredNode('sibling');
+        if (e.shiftKey) {
+          onAddStructuredNode('sibling-above');
+        } else {
+          onAddStructuredNode('sibling');
+        }
       }
       // 削除: Delete (既存の削除ボタン機能を呼び出し)
       if (e.key === 'Delete') {
