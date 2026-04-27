@@ -128,6 +128,8 @@ function Flow() {
   const [isAutoLayout, setIsAutoLayout] = useState(true);
   const [projectName, setProjectName] = useState('New Project');
   const [lastAddedNodeId, setLastAddedNodeId] = useState(null);
+  const [isEdgeMode, setIsEdgeMode] = useState(false); // [B-005] エッジ追加モード
+  const [edgeSourceId, setEdgeSourceId] = useState(null); // [B-005] エッジの接続元ノードID
 
   // [D-014] キーボードナビゲーションを有効化
   useKeyboardNavigation(ydoc, nodes, edges, setNodes);
@@ -272,6 +274,66 @@ function Flow() {
     },
     [yNodes, yEdges, isAutoLayout, setNodes, setEdges]
   );
+
+  // [B-005] ノードクリック時のハンドラ
+  const onNodeClick = useCallback((event, node) => {
+    if (isEdgeMode) {
+      event.preventDefault(); // React Flowのデフォルト選択動作を抑制
+      event.stopPropagation(); // onPaneClickが発火するのを防ぐ
+
+      ydoc.transact(() => {
+        // 既存の選択状態やエッジソース候補をクリア
+        yNodes.forEach((n, id) => {
+          if (n.selected || n.isEdgeSourceCandidate) {
+            yNodes.set(id, { ...n, selected: false, isEdgeSourceCandidate: false });
+          }
+        });
+
+        if (!edgeSourceId) {
+          // 1回目のクリック: 接続元ノードとしてマーク
+          yNodes.set(node.id, { ...yNodes.get(node.id), isEdgeSourceCandidate: true });
+          setEdgeSourceId(node.id);
+        } else {
+          // 2回目のクリック: エッジを作成
+          onConnect({ source: edgeSourceId, target: node.id });
+
+          // [修正] 接続先（ターゲット）ノードを選択状態にする
+          const targetNode = yNodes.get(node.id);
+          if (targetNode) {
+            yNodes.set(node.id, { ...targetNode, selected: true, isEdgeSourceCandidate: false });
+          }
+
+          // [修正] 接続元（ソース）の候補フラグを確実に折る
+          const sourceNode = yNodes.get(edgeSourceId);
+          if (sourceNode) {
+            yNodes.set(edgeSourceId, { ...sourceNode, isEdgeSourceCandidate: false });
+          }
+
+          setEdgeSourceId(null);
+          setIsEdgeMode(false);
+        }
+      }, 'structural');
+    } else {
+      // 通常のノード選択はonNodesChangeで処理されるため、ここでは何もしない
+      // 必要であれば、ここで通常の選択ロジックを実装することも可能
+    }
+  }, [isEdgeMode, edgeSourceId, yNodes, onConnect]);
+
+  // [B-005] キャンバス（背景）クリック時のハンドラ
+  const onPaneClick = useCallback(() => {
+    if (isEdgeMode && (edgeSourceId || isEdgeMode)) { // edgeSourceIdがあるか、モードがONなら
+      ydoc.transact(() => {
+        // 接続元候補と全ての選択状態をクリア
+        yNodes.forEach((n, id) => {
+          if (n.selected || n.isEdgeSourceCandidate) {
+            yNodes.set(id, { ...n, selected: false, isEdgeSourceCandidate: false });
+          }
+        });
+      }, 'structural');
+      setEdgeSourceId(null);
+      setIsEdgeMode(false); // モードも解除
+    }
+  }, [isEdgeMode, edgeSourceId, yNodes]);
 
   // ノードが追加された際に中央へ移動するエフェクト
   useEffect(() => {
@@ -617,7 +679,7 @@ function Flow() {
       // 入力フォーム等にフォーカスがある場合は無視
       if (['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return;
       if (['Enter', 'Insert', 'Delete', 'z', 'y'].includes(e.key)) console.log(`[Keyboard] Key pressed: ${e.key}`);
-
+      
       // Undo: Ctrl+Z
       if (e.ctrlKey && e.key === 'z') {
         e.preventDefault();
@@ -642,11 +704,25 @@ function Flow() {
       if (e.key === 'Delete') {
         onDeleteSelected();
       }
+
+      // [B-005] Escapeキーでエッジ追加モードを解除
+      if (e.key === 'Escape') {
+        if (isEdgeMode) {
+          e.preventDefault();
+          ydoc.transact(() => {
+            yNodes.forEach((n, id) => {
+              if (n.selected || n.isEdgeSourceCandidate) yNodes.set(id, { ...n, selected: false, isEdgeSourceCandidate: false });
+            });
+          }, 'structural');
+          setEdgeSourceId(null);
+          setIsEdgeMode(false);
+        }
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [undoManager, onAddStructuredNode, onDeleteSelected]);
+    return () => window.removeEventListener('keydown', handleKeyDown); // Cleanup
+  }, [undoManager, onAddStructuredNode, onDeleteSelected, isEdgeMode, edgeSourceId, yNodes, setIsEdgeMode, setEdgeSourceId]);
 
   // 全てのデータをリセットする関数
   const onReset = useCallback(() => {
@@ -671,18 +747,22 @@ function Flow() {
       const metaName = yProjectMeta.get('name');
       if (metaName) setProjectName(metaName);
 
-      // Yjs側のデータを正としてReactステートを更新する
       setNodes((currentNodes) => {
         const mergedNodes = nodesArray.map((yNode) => {
-          // 選択状態もYjsから直接受け取る（真実の源を統一）
-          return { ...yNode, selected: !!yNode.selected };
+          // 選択状態はトップレベル、エッジソース候補は data 内に含めて CustomNode へ渡す
+          return { 
+            ...yNode, 
+            selected: !!yNode.selected,
+            data: { 
+              ...yNode.data, 
+              isEdgeSourceCandidate: !!yNode.isEdgeSourceCandidate 
+            } 
+          };
         });
-
         return isAutoLayout && mergedNodes.length > 0
           ? getLayoutedElements(mergedNodes, edgesArray)
           : mergedNodes;
       });
-
       setEdges((currentEdges) => {
         const nextEdges = edgesArray.map((yEdge) => {
           const localEdge = currentEdges.find((e) => e.id === yEdge.id);
@@ -704,7 +784,7 @@ function Flow() {
       yEdges.unobserve(syncState);
       yProjectMeta.unobserve(syncState);
     };
-  }, [yNodes, yEdges, yProjectMeta, setNodes, setEdges, isAutoLayout]);
+  }, [yNodes, yEdges, yProjectMeta, setNodes, setEdges, isAutoLayout, edgeSourceId]); // Add edgeSourceId to dependencies
 
   return (
     <div style={{ width: '100%', height: '100vh', position: 'relative', overflow: 'hidden' }}>
@@ -762,8 +842,11 @@ function Flow() {
         nodes={nodes}
         edges={edges}
         onNodesChange={onNodesChange}
+        onNodeClick={onNodeClick} // [B-005] ノードクリックハンドラを追加
+        onPaneClick={onPaneClick} // [B-005] キャンバスクリックハンドラを追加
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
+        style={{ cursor: isEdgeMode ? 'crosshair' : 'inherit' }}
         nodeTypes={nodeTypes}
         defaultEdgeOptions={defaultEdgeOptions}
         nodesDraggable={!isAutoLayout}
@@ -836,6 +919,21 @@ function Flow() {
           </button>
           <button className="btn-icon" data-tooltip="全リセット" onClick={onReset} style={{ backgroundColor: '#fff', border: '2px solid #f44336', color: '#f44336', borderRadius: '4px', cursor: 'pointer' }}>
             <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+          </button>
+          {/* [B-005] エッジ追加モードボタン */}
+          <button
+            className="btn-icon"
+            data-tooltip={!isEdgeMode ? "エッジ追加モード開始" : (edgeSourceId ? "接続先を選択してください" : "接続元を選択してください")}
+            onClick={() => {
+              setIsEdgeMode(!isEdgeMode);
+              setEdgeSourceId(null); // モード切り替え時に接続元をリセット
+              ydoc.transact(() => { // 既存の候補/選択状態をクリア
+                yNodes.forEach((n, id) => { if (n.selected || n.isEdgeSourceCandidate) yNodes.set(id, { ...n, selected: false, isEdgeSourceCandidate: false }); });
+              }, 'structural');
+            }}
+            style={{ backgroundColor: isEdgeMode ? '#3b82f6' : '#fff', color: isEdgeMode ? '#fff' : '#3b82f6', border: `2px solid ${isEdgeMode ? '#3b82f6' : '#e2e8f0'}`, borderRadius: '4px', cursor: 'pointer' }}
+          >
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 11V3H8v8H2v10h20V11h-6zm-6-6h4v6h-4V5zm-4 8h4v6H4v-6zm14 6h-4v-6h4v6z"/></svg>
           </button>
         </Panel>
       </ReactFlow>

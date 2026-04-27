@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Handle, Position } from 'reactflow';
 
 const CustomNode = ({ id, data, selected }) => {
+  const { isEdgeSourceCandidate } = data;
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState(data.label);
   const inputRef = useRef(null);
@@ -59,7 +60,7 @@ const CustomNode = ({ id, data, selected }) => {
 
   return (
     <div 
-      className={`custom-node ${selected ? 'selected' : ''}`}
+      className={`custom-node ${selected ? 'selected' : ''} ${isEdgeSourceCandidate ? 'edge-source-candidate' : ''}`} // クラスを追加
       tabIndex={0}
       onDoubleClick={handleDoubleClick}
       style={{
@@ -68,11 +69,11 @@ const CustomNode = ({ id, data, selected }) => {
         padding: '10px',
         borderRadius: '5px',
         background: '#fff',
-        border: selected ? '2px solid #ff4d4d' : '1px solid #777',
+        border: selected ? '2px solid #ff4d4d' : (isEdgeSourceCandidate ? '3px solid #3b82f6' : '1px solid #777'), // 候補時は太い青枠
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        boxShadow: selected ? '0 0 10px rgba(255, 77, 77, 0.5)' : 'none'
+        boxShadow: selected ? '0 0 10px rgba(255, 77, 77, 0.5)' : (isEdgeSourceCandidate ? '0 0 15px rgba(59, 130, 246, 0.6)' : 'none') // 候補時は青く光る
       }}
     >
       <Handle type="target" position={Position.Left} />

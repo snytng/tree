@@ -105,5 +105,13 @@
     - この操作は `origin: 'structural'` で実行し、ドキュメントツリー全体の一貫性を保つ。
 
 ## 18. [D-018] 削除処理の同期
+
+## 19. [D-019] エッジ追加モードの実装
+- **状態管理**: `App.jsx` に `isEdgeMode` (boolean) と `edgeSourceId` (string | null) のステートを導入する。
+- **ハンドリング**: 
+    - `onNodeClick`: `isEdgeMode` が有効な場合、`edgeSourceId` が空ならクリックしたノード ID を保存。値があるならその ID から現在のノード ID へのエッジを作成（`onConnect` ロジックを再利用）し、`edgeSourceId` をリセットする。
+    - `onPaneClick`: 進行中のエッジ作成をキャンセル（`edgeSourceId` をリセット）する。
+- **UIフィードバック**: `edgeSourceId` と一致する ID を持つノードには、`CustomNode` 内で特別なボーダー色を適用するスタイルを動的に注入するか、`data` プロパティを介して通知する。
+- **キーボード連携**: `Escape` キー押下時に `isEdgeMode` を OFF にする。
 - **構造変更の同期**: `onDeleteSelected` を含む、グラフの構造を変更する全ての操作（追加、削除、接続）で、トランザクションオリジンに `'structural'` を指定する。
 - **理由**: `syncState` が `'local'` をスキップする仕様において、自分自身の操作による構造変化（およびそれに伴う再レイアウト）を確実に UI へ反映させるため。
