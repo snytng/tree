@@ -19,6 +19,8 @@ import * as Y from 'yjs';
 import { WebrtcProvider } from 'y-webrtc';
 import { IndexeddbPersistence } from 'y-indexeddb';
 import { useKeyboardNavigation } from './hooks/useKeyboardNavigation';
+import { useNodeEditor } from './hooks/useNodeEditor';
+import CustomNode from './hooks/CustomNode';
 import dagre from 'dagre';
 import mappingData from '../mapping.json';
 import JSZip from 'jszip';
@@ -33,31 +35,6 @@ const ydoc = new Y.Doc();
 const provider = new WebrtcProvider(ROOM_NAME, ydoc);
 // ローカルストレージ（IndexedDB）への永続化
 const indexeddb = new IndexeddbPersistence(ROOM_NAME, ydoc);
-
-// 左右にハンドルを持つカスタムノードの定義
-const CustomNode = ({ data, selected }) => {
-  return (
-    <div style={{ 
-      borderRadius: '8px', background: '#fff',
-      border: selected ? '2px solid #ff4444' : '1px solid #e2e8f0',
-      width: '180px',
-      height: '60px',
-      display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center',
-      boxShadow: selected ? '0 0 15px rgba(255, 68, 68, 0.4)' : '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
-      transition: 'all 0.2s ease', position: 'relative'
-    }}>
-      <Handle type="target" position={Position.Left} style={{ borderRadius: 0 }} />
-      <div>{data.label}</div>
-      <Handle type="source" position={Position.Right} style={{ borderRadius: 0 }} />
-    </div>
-  );
-};
-
-// nodeTypesはコンポーネントの外で定義するか、memo化する必要があります
-const nodeTypes = {
-  custom: CustomNode,
-  default: CustomNode, // デフォルトのノードタイプも左右ハンドルに設定
-};
 
 // 自動レイアウト計算関数
 const getLayoutedElements = (nodes, edges) => {
@@ -80,8 +57,8 @@ const getLayoutedElements = (nodes, edges) => {
   const finalNodePositions = {};
   const processedNodes = new Set();
   let currentYOffset = 0;
-  const verticalGap = 20;
-  const horizontalStep = 300; // ノード間隔を広げて視認性を向上
+  const verticalGap = 40; // 間隔を広げて重なりを防止
+  const horizontalStep = 250; // 設計書[D-004]の値に合わせる
   const nodeWidth = 180;
   const nodeHeight = 60;
 
@@ -154,6 +131,9 @@ function Flow() {
 
   // [D-014] キーボードナビゲーションを有効化
   useKeyboardNavigation(ydoc, nodes, edges, setNodes);
+
+  // [B-001] インライン編集と Markdown 同期を有効化
+  useNodeEditor(ydoc);
 
   // nodeTypesをコンポーネント内でmemo化して参照を安定させる
   const nodeTypes = useMemo(() => ({
@@ -433,7 +413,7 @@ function Flow() {
       const newNodes = Object.entries(allMetadata).map(([id, title]) => ({
         id,
         type: 'custom',
-        data: { label: `${id}: ${title}` },
+        data: { label: `[${id}] ${title}` },
         position: { x: 0, y: 0 },
       }));
 
@@ -491,7 +471,7 @@ function Flow() {
       const newNodes = Object.entries(docMetadata).map(([id, title]) => ({
         id,
         type: 'custom',
-        data: { label: `${id}: ${title}` },
+        data: { label: `[${id}] ${title}` },
         position: { x: 0, y: 0 },
       }));
 
@@ -787,6 +767,7 @@ function Flow() {
         nodeTypes={nodeTypes}
         defaultEdgeOptions={defaultEdgeOptions}
         nodesDraggable={!isAutoLayout}
+        zoomOnDoubleClick={false}
         fitView
       >
         <Background />

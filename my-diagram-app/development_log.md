@@ -58,4 +58,9 @@ Vite + React + React Flowで、ノード（四角）とエッジ（線）を動�
 - **同期オリジンの統一調整**:
     - `onConnect`、`onAddNode`、`onAddStructuredNode` のオリジンを `'structural'` に変更。
     - `onNodesChange` / `onEdgesChange` において、要素の削除が含まれる場合のみ自動的に `'structural'` オリジンを使用するようロジックを追加。
+
+### 2.6 ノード編集機能の実装 (2026-04-27)
+- **[B-001] インライン編集の導入**:
+    - `CustomNode` に編集モード（`isEditing`）を追加し、ダブルクリックまたは `F2` で起動。
+    - 編集確定時に `yNodes` および `projectFiles` (Markdown) の該当ヘッダーを同期更新する `useNodeEditor` フックを実装。
     - これにより、構造変更を伴う全操作で `syncState` による再レイアウトが確実に行われるよう改善。
