@@ -38,14 +38,16 @@ const indexeddb = new IndexeddbPersistence(ROOM_NAME, ydoc);
 
 // 自動レイアウト計算関数
 const getLayoutedElements = (nodes, edges) => {
-  if (nodes.length === 0) return nodes;
+  // 非表示（hidden）ノードを除外して計算対象を絞り込む
+  const visibleNodes = nodes.filter(n => !n.hidden);
+  if (visibleNodes.length === 0) return nodes;
 
-  const nodeIds = new Set(nodes.map(n => n.id));
-  const validEdges = edges.filter(e => nodeIds.has(e.source) && nodeIds.has(e.target));
+  const nodeIds = new Set(visibleNodes.map(n => n.id));
+  const validEdges = edges.filter(e => !e.hidden && nodeIds.has(e.source) && nodeIds.has(e.target));
 
   const adj = {};
   const inDegree = {};
-  nodes.forEach(n => {
+  visibleNodes.forEach(n => {
     adj[n.id] = [];
     inDegree[n.id] = 0;
   });
@@ -99,7 +101,7 @@ const getLayoutedElements = (nodes, edges) => {
   };
 
   // 1. ルートノードを現在の物理順序（y座標）でソート
-  const roots = nodes
+  const roots = visibleNodes
     .filter(n => inDegree[n.id] === 0)
     .sort((a, b) => {
       if (a.position.y !== b.position.y) return a.position.y - b.position.y;
@@ -112,7 +114,7 @@ const getLayoutedElements = (nodes, edges) => {
   });
 
   // 2. ルートから辿れなかった孤立ノード（サイクル等）の救済
-  nodes.forEach(node => {
+  visibleNodes.forEach(node => {
     if (!finalNodePositions[node.id]) {
       const { height } = layoutSubtree(node.id, 0, currentYOffset);
       currentYOffset += height + verticalGap * 2;
@@ -136,6 +138,7 @@ function Flow() {
   const [lastAddedNodeId, setLastAddedNodeId] = useState(null);
   const [isEdgeMode, setIsEdgeMode] = useState(false); // [B-005] エッジ追加モード
   const [edgeSourceId, setEdgeSourceId] = useState(null); // [B-005] エッジの接続元ノードID
+  const [focusMode, setFocusMode] = useState('none'); // [B-016] フォーカスモード
 
   // [D-014] キーボードナビゲーションを有効化
   useKeyboardNavigation(ydoc, nodes, edges, setNodes);
@@ -154,6 +157,8 @@ function Flow() {
   const edgesRef = React.useRef(edges);
   useEffect(() => { nodesRef.current = nodes; }, [nodes]);
   useEffect(() => { edgesRef.current = edges; }, [edges]);
+
+  const selectedNodeId = useMemo(() => nodes.find(n => n.selected)?.id, [nodes]);
 
   const { setCenter, getViewport, fitView } = useReactFlow();
 
@@ -816,6 +821,17 @@ function Flow() {
         onDeleteSelected();
       }
 
+      // [B-016] フォーカスモード切り替え: F
+      if (e.key === 'f' || e.key === 'F') {
+        e.preventDefault();
+        setFocusMode(prev => {
+          if (prev === 'none') return 'both';
+          if (prev === 'both') return 'upstream';
+          if (prev === 'upstream') return 'downstream';
+          return 'none';
+        });
+      }
+
       // [B-005] Escapeキーでエッジ追加モードを解除
       if (e.key === 'Escape') {
         if (isEdgeMode) {
@@ -833,7 +849,7 @@ function Flow() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown); // Cleanup
-  }, [undoManager, onAddStructuredNode, onDeleteSelected, isEdgeMode, edgeSourceId, yNodes, setIsEdgeMode, setEdgeSourceId]);
+  }, [undoManager, onAddStructuredNode, onDeleteSelected, isEdgeMode, edgeSourceId, yNodes, setIsEdgeMode, setEdgeSourceId, setFocusMode]);
 
   // 全てのデータをリセットする関数
   const onReset = useCallback(() => {
@@ -858,28 +874,58 @@ function Flow() {
       const metaName = yProjectMeta.get('name');
       if (metaName) setProjectName(metaName);
 
+      // [B-016] フォーカス対象（到達可能セット）の算出
+      const focusSet = (focusMode === 'none') ? null : (() => {
+        const selected = nodesArray.find(n => n.selected);
+        if (!selected) return null;
+        const nodeIds = new Set([selected.id]);
+        const edgeIds = new Set();
+        const adjF = {}; const adjB = {};
+        edgesArray.forEach(e => {
+          if (!adjF[e.source]) adjF[e.source] = []; adjF[e.source].push({t: e.target, id: e.id});
+          if (!adjB[e.target]) adjB[e.target] = []; adjB[e.target].push({s: e.source, id: e.id});
+        });
+        const trav = (id, adj, dir) => {
+          const q = [id]; const v = new Set([id]);
+          while(q.length) {
+            const c = q.pop();
+            (adj[c] || []).forEach(edge => {
+              const n = dir === 'f' ? edge.t : edge.s;
+              if(!v.has(n)){ v.add(n); nodeIds.add(n); q.push(n); }
+              edgeIds.add(edge.id);
+            });
+          }
+        };
+        if(focusMode === 'downstream' || focusMode === 'both') trav(selected.id, adjF, 'f');
+        if(focusMode === 'upstream' || focusMode === 'both') trav(selected.id, adjB, 'b');
+        return {nodeIds, edgeIds};
+      })();
+
       setNodes((currentNodes) => {
         const mergedNodes = nodesArray.map((yNode) => {
+          const isHidden = focusSet ? !focusSet.nodeIds.has(yNode.id) : false;
           // 選択状態はトップレベル、エッジソース候補は data 内に含めて CustomNode へ渡す
           return { 
             ...yNode, 
             selected: !!yNode.selected,
+            hidden: isHidden,
             data: { 
               ...yNode.data, 
               isEdgeSourceCandidate: !!yNode.isEdgeSourceCandidate 
             } 
           };
         });
+
+        // エッジのhidden状態も計算
+        const updatedEdges = edgesArray.map(e => ({
+          ...e,
+          hidden: focusSet ? !focusSet.edgeIds.has(e.id) : false
+        }));
+        setEdges(updatedEdges);
+
         return isAutoLayout && mergedNodes.length > 0
-          ? getLayoutedElements(mergedNodes, edgesArray)
+          ? getLayoutedElements(mergedNodes, updatedEdges)
           : mergedNodes;
-      });
-      setEdges((currentEdges) => {
-        const nextEdges = edgesArray.map((yEdge) => {
-          const localEdge = currentEdges.find((e) => e.id === yEdge.id);
-          return localEdge ? { ...yEdge, selected: localEdge.selected } : yEdge;
-        });
-        return nextEdges;
       });
     };
 
@@ -895,7 +941,7 @@ function Flow() {
       yEdges.unobserve(syncState);
       yProjectMeta.unobserve(syncState);
     };
-  }, [yNodes, yEdges, yProjectMeta, setNodes, setEdges, isAutoLayout, edgeSourceId]); // Add edgeSourceId to dependencies
+  }, [yNodes, yEdges, yProjectMeta, setNodes, setEdges, isAutoLayout, edgeSourceId, focusMode, selectedNodeId]); // Dependencies updated
 
   return (
     <div style={{ width: '100%', height: '100vh', position: 'relative', overflow: 'hidden' }}>
@@ -1030,6 +1076,20 @@ function Flow() {
           </button>
           <button className="btn-icon" data-tooltip="全リセット" onClick={onReset} style={{ backgroundColor: '#fff', border: '2px solid #f44336', color: '#f44336', borderRadius: '4px', cursor: 'pointer' }}>
             <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+          </button>
+          {/* [B-016] フォーカスモードボタン */}
+          <button
+            className="btn-icon"
+            data-tooltip={`フォーカスモード: ${focusMode}`}
+            onClick={() => setFocusMode(prev => {
+              if (prev === 'none') return 'both';
+              if (prev === 'both') return 'upstream';
+              if (prev === 'upstream') return 'downstream';
+              return 'none';
+            })}
+            style={{ backgroundColor: focusMode !== 'none' ? '#8b5cf6' : '#fff', color: focusMode !== 'none' ? '#fff' : '#8b5cf6', border: '2px solid #8b5cf6', borderRadius: '4px', cursor: 'pointer' }}
+          >
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 8c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4zm-7 7H3v4c0 1.1.9 2 2 2h4v-2H5v-4zM5 5h4V3H5c-1.1 0-2 .9-2 2v4h2V5zm14-2h-4v2h4v4h2V5c0-1.1-.9-2-2-2zm0 16h-4v2h4c1.1 0 2-.9 2-2v-4h-2v4z"/></svg>
           </button>
           {/* [B-005] エッジ追加モードボタン */}
           <button
