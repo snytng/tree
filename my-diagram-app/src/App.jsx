@@ -17,6 +17,7 @@ import ReactFlow, {
 import 'reactflow/dist/style.css';
 import * as Y from 'yjs';
 import { WebrtcProvider } from 'y-webrtc';
+import { WebsocketProvider } from 'y-websocket'; // y-websocketはApp.jsxで直接使用するため、ルートのpackage.jsonにも必要
 import { IndexeddbPersistence } from 'y-indexeddb';
 import { useKeyboardNavigation } from './hooks/useKeyboardNavigation';
 import { useNodeEditor } from './hooks/useNodeEditor';
@@ -33,6 +34,8 @@ const ROOM_NAME = 'react-flow-demo-room';
 const ydoc = new Y.Doc();
 // 部屋名 'react-flow-demo-room' でWebRTCプロバイダーを設定
 const provider = new WebrtcProvider(ROOM_NAME, ydoc);
+// [D-023] MCP連携用のWebSocketプロバイダーを追加 (ローカルの同期サーバー経由)
+const wsProvider = new WebsocketProvider('ws://localhost:1234', ROOM_NAME, ydoc);
 // ローカルストレージ（IndexedDB）への永続化
 const indexeddb = new IndexeddbPersistence(ROOM_NAME, ydoc);
 
