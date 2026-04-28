@@ -138,6 +138,7 @@ function Flow() {
   const [edges, setEdges, onEdgesChangeState] = useEdgesState(initialEdges);
   const [isAutoLayout, setIsAutoLayout] = useState(true);
   const [projectName, setProjectName] = useState('New Project');
+  const [isEditingProjectName, setIsEditingProjectName] = useState(false);
   const [lastAddedNodeId, setLastAddedNodeId] = useState(null);
   const [isEdgeMode, setIsEdgeMode] = useState(false); // [B-005] エッジ追加モード
   const [edgeSourceId, setEdgeSourceId] = useState(null); // [B-005] エッジの接続元ノードID
@@ -1016,15 +1017,50 @@ function Flow() {
         <Background />
         <Controls />
         <Panel position="top-left">
-          <div style={{ 
-            background: '#fff', 
-            padding: '8px 12px', 
-            borderRadius: '4px', 
-            border: '2px solid #1a192b',
-            boxShadow: '0 2px 5px rgba(0,0,0,0.1)'
-          }}>
+          <div 
+            style={{ 
+              background: '#fff', 
+              padding: '8px 12px', 
+              borderRadius: '4px', 
+              border: '2px solid #1a192b',
+              boxShadow: '0 2px 5px rgba(0,0,0,0.1)',
+              cursor: isEditingProjectName ? 'default' : 'pointer'
+            }}
+            onClick={() => !isEditingProjectName && setIsEditingProjectName(true)}
+          >
             <span style={{ fontSize: '10px', color: '#666', display: 'block', lineHeight: 1 }}>PROJECT</span>
-            <strong style={{ fontSize: '14px' }}>{projectName}</strong>
+            {isEditingProjectName ? (
+              <input
+                type="text"
+                value={projectName}
+                autoFocus
+                onChange={(e) => {
+                  const newName = e.target.value;
+                  setProjectName(newName);
+                  yProjectMeta.set('name', newName);
+                }}
+                onBlur={() => setIsEditingProjectName(false)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') setIsEditingProjectName(false);
+                  if (e.key === 'Escape') setIsEditingProjectName(false);
+                  e.stopPropagation();
+                }}
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                  fontSize: '14px',
+                  fontWeight: 'bold',
+                  border: 'none',
+                  outline: 'none',
+                  width: '100%',
+                  padding: 0,
+                  margin: 0,
+                  background: 'transparent',
+                  fontFamily: 'inherit'
+                }}
+              />
+            ) : (
+              <strong style={{ fontSize: '14px' }}>{projectName}</strong>
+            )}
           </div>
         </Panel>
 

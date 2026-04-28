@@ -159,3 +159,23 @@
     - [x] MCP インスペクターまたは Claude Desktop から `read_graph` を呼び出し、現在の図面内容が JSON で返ってくること。
     - [ ] `add_node` ツールを呼び出した際、ブラウザ上のキャンバスに即座にノードが出現すること。
     - [ ] 自動レイアウトが有効な場合、AI による編集後も正しく整列されること。
+
+## 24. [D-024] プロジェクト名編集の実装
+- **UI要素**:
+    - `Panel position="top-left"` 内の `<strong>{projectName}</strong>` を、編集可能な `<input type="text">` 要素に置き換える。
+    - `<input>` 要素は、通常時は `<strong>` のように表示され、クリックまたはダブルクリックで編集モードに移行する。
+- **状態管理**:
+    - `isEditingProjectName` (boolean) ステートを導入し、編集モードを制御する。
+- **イベントハンドリング**:
+    - `<input>` 要素の `onClick` または `onDoubleClick` で `isEditingProjectName` を `true` に設定。
+    - `<input>` 要素の `onBlur` または `onKeyDown (Enter)` で `isEditingProjectName` を `false` に設定し、変更を確定する。
+    - `onChange` イベントで入力値を取得し、`yProjectMeta.set('name', newName)` を呼び出す。
+- **Yjs同期**:
+    - `useEffect` 内の `syncState` 関数で `yProjectMeta.get('name')` を監視し、変更があれば `setProjectName` でReactステートを更新する。
+- **エクスポート連携**:
+    - `onExportProject` 関数は、既に `projectName` ステートを参照しているため、この変更により自動的に編集後のプロジェクト名がZIPファイル名に反映される。
+- **検証手順 (Test Spec)**:
+    - [x] 画面左上のプロジェクト名をクリックすると編集可能になること。
+    - [x] 編集後、Enterキーまたはフォーカスを外すことで変更が確定し、表示が更新されること。
+    - [x] 複数のブラウザ/タブで同時にプロジェクト名を編集し、リアルタイムに同期されること。
+    - [x] 編集後のプロジェクト名でZIPファイルがエクスポートされること。
