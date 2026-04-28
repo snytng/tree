@@ -21,15 +21,21 @@ export const useKeyboardNavigation = (ydoc, nodes, edges, setNodes) => {
       if (event.ctrlKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
         event.preventDefault();
         const parentEdge = edges.find(e => e.target === currentNode.id);
-        if (!parentEdge) return; // 親がいない（ルート）場合は現状スキップ
+        
+        let siblings;
+        if (parentEdge) {
+          // 親がいる場合: 親を共有する兄弟を特定
+          const siblingIds = edges
+            .filter(e => e.source === parentEdge.source)
+            .map(e => e.target);
+          siblings = nodes.filter(n => siblingIds.includes(n.id));
+        } else {
+          // [D-016] 親がいない場合: 入力エッジを持たないノードをルート兄弟とみなす
+          const targetIds = new Set(edges.map(e => e.target));
+          siblings = nodes.filter(n => !targetIds.has(n.id));
+        }
 
-        const siblingIds = edges
-          .filter(e => e.source === parentEdge.source)
-          .map(e => e.target);
-
-        const siblings = nodes
-          .filter(n => siblingIds.includes(n.id))
-          .sort((a, b) => a.position.y - b.position.y);
+        siblings.sort((a, b) => a.position.y - b.position.y);
 
         const currentIndex = siblings.findIndex(s => s.id === currentNode.id);
         let targetSibling = null;
@@ -53,6 +59,84 @@ export const useKeyboardNavigation = (ydoc, nodes, edges, setNodes) => {
             }
           }, 'structural'); // [D-016] 構造変更を示すオリジンを付与
         }
+        return;
+      }
+
+      // [D-025] Ctrl + Right による階層下げ (Indent)
+      if (event.ctrlKey && event.key === 'ArrowRight') {
+        event.preventDefault();
+        const yEdges = ydoc.getMap('edges');
+        const yNodes = ydoc.getMap('nodes');
+
+        // 1. 親を特定
+        const parentEdge = edges.find(e => e.target === currentNode.id);
+        const parentId = parentEdge ? parentEdge.source : null;
+
+        // 2. 兄弟を特定
+        let siblings;
+        if (parentId) {
+          const siblingIds = edges.filter(e => e.source === parentId).map(e => e.target);
+          siblings = nodes.filter(n => siblingIds.includes(n.id));
+        } else {
+          // 親がいない場合はルートノード同士を兄弟とみなす
+          const targetIds = new Set(edges.map(e => e.target));
+          siblings = nodes.filter(n => !targetIds.has(n.id));
+        }
+
+        siblings.sort((a, b) => a.position.y - b.position.y);
+        const currentIndex = siblings.findIndex(s => s.id === currentNode.id);
+
+        // 3. 直上の兄弟がいればその子にする
+        if (currentIndex > 0) {
+          const targetParent = siblings[currentIndex - 1];
+          ydoc.transact(() => {
+            if (parentEdge) yEdges.delete(parentEdge.id);
+            const newEdgeId = `edge-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+            yEdges.set(newEdgeId, { id: newEdgeId, source: targetParent.id, target: currentNode.id });
+            
+            // 順序維持のための微調整 (自動レイアウトのヒント)
+            const nodeData = yNodes.get(currentNode.id);
+            if (nodeData) {
+              yNodes.set(currentNode.id, { ...nodeData, position: { ...nodeData.position, y: nodeData.position.y + 0.01 } });
+            }
+          }, 'structural');
+        }
+        return;
+      }
+
+      // [D-026] Ctrl + Left による階層上げ (Outdent)
+      if (event.ctrlKey && event.key === 'ArrowLeft') {
+        event.preventDefault();
+        const yEdges = ydoc.getMap('edges');
+        const yNodes = ydoc.getMap('nodes');
+
+        // 1. 親を特定
+        const parentEdge = edges.find(e => e.target === currentNode.id);
+        if (!parentEdge) return; // 親がいない（既にルート）場合は何もしない
+
+        const parentNode = nodes.find(n => n.id === parentEdge.source);
+        if (!parentNode) return;
+
+        // 2. 祖父を特定
+        const grandParentEdge = edges.find(e => e.target === parentNode.id);
+        const grandParentId = grandParentEdge ? grandParentEdge.source : null;
+
+        ydoc.transact(() => {
+          // 既存の親エッジを削除
+          yEdges.delete(parentEdge.id);
+
+          // 祖父がいれば接続、いなければルート化
+          if (grandParentId) {
+            const newEdgeId = `edge-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+            yEdges.set(newEdgeId, { id: newEdgeId, source: grandParentId, target: currentNode.id });
+          }
+
+          // 順序維持のための微調整 (自動レイアウトのヒント: 元の親のすぐ下に配置)
+          const nodeData = yNodes.get(currentNode.id);
+          if (nodeData) {
+            yNodes.set(currentNode.id, { ...nodeData, position: { ...nodeData.position, y: parentNode.position.y + 0.01 } });
+          }
+        }, 'structural');
         return;
       }
 
