@@ -59,10 +59,10 @@ const getLayoutedElements = (nodes, edges) => {
   const finalNodePositions = {};
   const processedNodes = new Set();
   let currentYOffset = 0;
-  const verticalGap = 50; // 間隔を広げて重なりを防止
-  const horizontalStep = 400; 
-  const nodeWidth = 200;
-  const nodeHeight = 50;
+  const verticalGap = 40; // [D-004] 垂直方向の隙間
+  const horizontalStep = 360; // [D-015] 水平方向のステップ幅（ノード幅180 + 間隔180）
+  const nodeWidth = 180;
+  const nodeHeight = 60;
 
   // 再帰的にサブツリーをレイアウトし、その「箱」の総高さを返す関数
   const layoutSubtree = (nodeId, x, y) => {
@@ -658,7 +658,7 @@ function Flow() {
         id: nodeId,
         type: 'custom',
         data: { label: 'Parent Node' },
-        position: { x: selectedNode.position.x - 180, y: selectedNode.position.y },
+        position: { x: selectedNode.position.x - 360, y: selectedNode.position.y },
         selected: true,
       };
 
@@ -752,7 +752,7 @@ function Flow() {
       id: nodeId,
       type: 'custom',
       data: { label: `${mode === 'child' ? 'Child' : 'Sibling'} Node` },
-      position: { x: selectedNode.position.x + 180, y: targetY },
+      position: { x: selectedNode.position.x + 360, y: targetY },
       selected: true,
     };
     const newEdge = parentId ? { id: edgeId, source: parentId, target: nodeId } : null;
