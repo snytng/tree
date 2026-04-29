@@ -22,7 +22,7 @@ import { IndexeddbPersistence } from 'y-indexeddb';
 import { useKeyboardNavigation } from './hooks/useKeyboardNavigation';
 import { useNodeEditor } from './hooks/useNodeEditor';
 import CustomNode from './hooks/CustomNode';
-import dagre from 'dagre';
+import { getLayoutedElements } from './utils/layoutEngine';
 import mappingData from '../mapping.json';
 import JSZip from 'jszip';
 
@@ -38,99 +38,6 @@ const provider = new WebrtcProvider(ROOM_NAME, ydoc);
 const wsProvider = new WebsocketProvider('ws://localhost:1234', ROOM_NAME, ydoc);
 // ローカルストレージ（IndexedDB）への永続化
 const indexeddb = new IndexeddbPersistence(ROOM_NAME, ydoc);
-
-// 自動レイアウト計算関数
-const getLayoutedElements = (nodes, edges) => {
-  // 非表示（hidden）ノードを除外して計算対象を絞り込む
-  const visibleNodes = nodes.filter(n => !n.hidden);
-  if (visibleNodes.length === 0) return nodes;
-
-  const nodeIds = new Set(visibleNodes.map(n => n.id));
-  const validEdges = edges.filter(e => !e.hidden && nodeIds.has(e.source) && nodeIds.has(e.target));
-
-  const adj = {};
-  const inDegree = {};
-  visibleNodes.forEach(n => {
-    adj[n.id] = [];
-    inDegree[n.id] = 0;
-  });
-  validEdges.forEach(edge => {
-    adj[edge.source].push(edge.target);
-    inDegree[edge.target]++;
-  });
-
-  const finalNodePositions = {};
-  const processedNodes = new Set();
-  let currentYOffset = 0;
-  const verticalGap = 40; // [D-004] 垂直方向の隙間
-  const horizontalStep = 360; // [D-015] 水平方向のステップ幅（ノード幅180 + 間隔180）
-  const NODE_WIDTH = 180;
-  const NODE_HEIGHT = 60;
-
-  // 再帰的にサブツリーをレイアウトし、その「箱」の総高さを返す関数
-  const layoutSubtree = (nodeId, x, y) => {
-    if (processedNodes.has(nodeId)) return { height: 0 };
-    processedNodes.add(nodeId);
-
-    // 子ノードを取得し、現在の y 座標順にソート
-    const childrenIds = (adj[nodeId] || []).filter(id => !processedNodes.has(id));
-    childrenIds.sort((a, b) => {
-      const nodeA = nodes.find(n => n.id === a);
-      const nodeB = nodes.find(n => n.id === b);
-      const yA = nodeA?.position?.y || 0;
-      const yB = nodeB?.position?.y || 0;
-      if (yA !== yB) return yA - yB;
-      return a.localeCompare(b); // [D-004] IDによる安定ソート
-    });
-
-    let childrenBoxHeight = 0;
-    childrenIds.forEach(childId => {
-      const { height } = layoutSubtree(childId, x + horizontalStep, y + childrenBoxHeight);
-      if (height > 0) {
-        childrenBoxHeight += height + verticalGap;
-      }
-    });
-
-    if (childrenIds.length > 0 && childrenBoxHeight > 0) {
-      childrenBoxHeight -= verticalGap; // 最後の余白を削除
-    }
-
-    const myHeight = Math.max(NODE_HEIGHT, childrenBoxHeight);
-    // 親を子たちの垂直方向の中央に配置
-    const myY = y + (myHeight / 2) - (NODE_HEIGHT / 2);
-
-    finalNodePositions[nodeId] = { x, y: myY };
-    return { height: myHeight };
-  };
-
-  // 1. ルートノードを現在の物理順序（y座標）でソート
-  const roots = visibleNodes
-    .filter(n => inDegree[n.id] === 0)
-    .sort((a, b) => {
-      if (a.position.y !== b.position.y) return a.position.y - b.position.y;
-      return a.id.localeCompare(b.id); // [D-004] IDによる安定ソート
-    });
-
-  roots.forEach(root => {
-    const { height } = layoutSubtree(root.id, 0, currentYOffset);
-    currentYOffset += height + verticalGap * 2; // ルート間は少し広めに空ける
-  });
-
-  // 2. ルートから辿れなかった孤立ノード（サイクル等）の救済
-  visibleNodes.forEach(node => {
-    if (!finalNodePositions[node.id]) {
-      const { height } = layoutSubtree(node.id, 0, currentYOffset);
-      currentYOffset += height + verticalGap * 2;
-    }
-  });
-
-  return nodes.map((node) => ({
-    ...node,
-    position: finalNodePositions[node.id] || node.position,
-    width: NODE_WIDTH, // [修正] 明示的なサイズを保持
-    height: NODE_HEIGHT
-  }));
-};
 
 const initialNodes = [];
 const initialEdges = [];
