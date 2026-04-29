@@ -73,7 +73,6 @@ function Flow() {
   const [draggingNodeId, setDraggingNodeId] = useState(null); // [D-027] ドラッグ中のノードID
   const [focusMode, setFocusMode] = useState('none'); // [B-016] フォーカスモード
   const [isStructureMode, setIsStructureMode] = useState(false); // [修正] 「構成」モードの状態管理
-  const [lastCalculatedPos, setLastCalculatedPos] = useState(null); // [D-029] 最後に計算された論理位置
 
   // [D-027] ハイライト状態を安定させ、チャタリングを防ぐためのRef
   const lastTargetIdRef = React.useRef(null);
@@ -84,7 +83,6 @@ function Flow() {
       .forEach(el => el.classList.remove('drag-target-highlight'));
     lastTargetIdRef.current = null;
     lastSourceIdRef.current = null;
-    setLastCalculatedPos(null);
   }, []);
 
   // [修正] モードの切り替え（配置 ↔ 構成）をグローバルに監視
@@ -367,11 +365,8 @@ function Flow() {
         
         // 論理的な配置を計算
         const layouted = getLayoutedElements(tempNodes, edgesRef.current);
-        const myCalculated = layouted.find(n => n.id === node.id);
-        
-        if (myCalculated) {
-          setLastCalculatedPos(myCalculated.position);
-          
+
+        if (layouted) {
           // ドラッグ中の本人以外を計算後の位置に動かす（本人はマウスに追従）
           setNodes(layouted.map(n => 
             n.id === node.id ? { ...n, position: node.position } : n
@@ -452,13 +447,16 @@ function Flow() {
     const finalLayout = isAutoLayout ? getLayoutedElements(tempNodes, edgesRef.current) : tempNodes;
 
     ydoc.transact(() => {
-      // [D-029] 座標の確定: 計算された全ノードの座標を Yjs にコミットする
-      // これにより、押し出された周りのノードの順序（Y座標）も確実に保存される
+      // [改善] 差分更新: 座標が実際に変化したノードだけをコミット対象にする
       finalLayout.forEach(layoutedNode => {
         const yNode = yNodes.get(layoutedNode.id);
         if (yNode) {
-          // 座標を上書き（自動レイアウト時は計算値を、手動時はドロップ位置を保存）
-          yNodes.set(layoutedNode.id, { ...yNode, position: layoutedNode.position });
+          const prevPos = yNode.position;
+          // 誤差レベル（0.1px以下）の変更は無視して通信量を削減
+          if (Math.abs(prevPos.x - layoutedNode.position.x) > 0.1 || 
+              Math.abs(prevPos.y - layoutedNode.position.y) > 0.1) {
+            yNodes.set(layoutedNode.id, { ...yNode, position: layoutedNode.position });
+          }
         }
       });
 
