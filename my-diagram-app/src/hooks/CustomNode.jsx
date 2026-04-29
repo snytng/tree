@@ -64,6 +64,7 @@ const CustomNode = ({ id, data, selected }) => {
       tabIndex={0}
       onDoubleClick={handleDoubleClick}
       style={{
+        boxSizing: 'border-box',
         width: '180px',
         height: '60px',
         padding: '10px',

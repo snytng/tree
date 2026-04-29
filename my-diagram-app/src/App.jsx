@@ -73,6 +73,7 @@ function Flow() {
   const [draggingNodeId, setDraggingNodeId] = useState(null); // [D-027] ドラッグ中のノードID
   const [focusMode, setFocusMode] = useState('none'); // [B-016] フォーカスモード
   const [isStructureMode, setIsStructureMode] = useState(false); // [修正] 「構成」モードの状態管理
+  const [lastCalculatedPos, setLastCalculatedPos] = useState(null); // [D-029] 最後に計算された論理位置
 
   // [D-027] ハイライト状態を安定させ、チャタリングを防ぐためのRef
   const lastTargetIdRef = React.useRef(null);
@@ -83,6 +84,7 @@ function Flow() {
       .forEach(el => el.classList.remove('drag-target-highlight'));
     lastTargetIdRef.current = null;
     lastSourceIdRef.current = null;
+    setLastCalculatedPos(null);
   }, []);
 
   // [修正] モードの切り替え（配置 ↔ 構成）をグローバルに監視
@@ -354,7 +356,28 @@ function Flow() {
   const onNodeDrag = useCallback((event, node) => {
     const currentMode = isStructureMode || event.shiftKey;
     if (!currentMode) {
+      // 配置モード (Layout Mode)
       if (lastSourceIdRef.current || lastTargetIdRef.current) clearHighlights();
+
+      // [D-029] ライブ・ローカルレイアウト
+      if (isAutoLayout) {
+        const tempNodes = nodesRef.current.map(n => 
+          n.id === node.id ? { ...n, position: node.position } : n
+        );
+        
+        // 論理的な配置を計算
+        const layouted = getLayoutedElements(tempNodes, edgesRef.current);
+        const myCalculated = layouted.find(n => n.id === node.id);
+        
+        if (myCalculated) {
+          setLastCalculatedPos(myCalculated.position);
+          
+          // ドラッグ中の本人以外を計算後の位置に動かす（本人はマウスに追従）
+          setNodes(layouted.map(n => 
+            n.id === node.id ? { ...n, position: node.position } : n
+          ));
+        }
+      }
       return;
     }
     
@@ -422,12 +445,22 @@ function Flow() {
     // 自分自身や自分の子孫でないノードをターゲットにする
     const targetNode = intersections.find(n => n.id !== node.id && !isDescendant(nodesRef.current, edgesRef.current, node.id, n.id));
 
+    // [D-029] 最終的な論理配置を再計算して、全ノードの座標を確定させる準備
+    const tempNodes = nodesRef.current.map(n => 
+      n.id === node.id ? { ...n, position: node.position } : n
+    );
+    const finalLayout = isAutoLayout ? getLayoutedElements(tempNodes, edgesRef.current) : tempNodes;
+
     ydoc.transact(() => {
-      // [S-027] 座標の確定: 配置モードでも自動レイアウトの並び順に反映させるため常に保存する
-      const yNode = yNodes.get(node.id);
-      if (yNode) {
-        yNodes.set(node.id, { ...yNode, position: node.position });
-      }
+      // [D-029] 座標の確定: 計算された全ノードの座標を Yjs にコミットする
+      // これにより、押し出された周りのノードの順序（Y座標）も確実に保存される
+      finalLayout.forEach(layoutedNode => {
+        const yNode = yNodes.get(layoutedNode.id);
+        if (yNode) {
+          // 座標を上書き（自動レイアウト時は計算値を、手動時はドロップ位置を保存）
+          yNodes.set(layoutedNode.id, { ...yNode, position: layoutedNode.position });
+        }
+      });
 
       // [S-028] Shiftキーが押されている場合のみ構造変更を実行
       if (isStructuralChange) {
@@ -1106,6 +1139,7 @@ function Flow() {
         }
         /* 通常時のノードスタイル */
         .custom-node {
+          box-sizing: border-box;
           border: 1px solid #777;
           transition: border-color 0.2s, box-shadow 0.2s;
         }
