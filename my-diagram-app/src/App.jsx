@@ -23,6 +23,7 @@ import { useKeyboardNavigation } from './hooks/useKeyboardNavigation';
 import { useNodeEditor } from './hooks/useNodeEditor';
 import CustomNode from './hooks/CustomNode';
 import { getLayoutedElements } from './utils/layoutEngine';
+import { isDescendant, parseHierarchyText, generateHierarchyText } from './utils/graphUtils';
 import mappingData from '../mapping.json';
 import JSZip from 'jszip';
 
@@ -41,25 +42,6 @@ const indexeddb = new IndexeddbPersistence(ROOM_NAME, ydoc);
 
 const initialNodes = [];
 const initialEdges = [];
-
-// [D-027] 循環参照防止のための子孫チェックヘルパー
-const isDescendant = (nodes, edges, parentId, potentialChildId) => {
-  const adj = {};
-  edges.forEach(e => {
-    if (!adj[e.source]) adj[e.source] = [];
-    adj[e.source].push(e.target);
-  });
-  const queue = [parentId];
-  const visited = new Set();
-  while (queue.length > 0) {
-    const current = queue.shift();
-    if (current === potentialChildId) return true;
-    if (visited.has(current)) continue;
-    visited.add(current);
-    (adj[current] || []).forEach(child => queue.push(child));
-  }
-  return false;
-};
 
 function Flow() {
   const [nodes, setNodes, onNodesChangeState] = useNodesState(initialNodes);
@@ -330,6 +312,68 @@ function Flow() {
       }
     }
   }, [nodes, lastAddedNodeId, setCenter, getViewport]);
+
+  // [S-034] 階層構造のコピー (Ctrl+C)
+  const onCopyHierarchy = useCallback(() => {
+    const selectedNode = nodesRef.current.find(n => n.selected);
+    if (!selectedNode) return;
+
+    const text = generateHierarchyText(nodesRef.current, edgesRef.current, selectedNode.id);
+    navigator.clipboard.writeText(text);
+    console.log('[Clipboard] Hierarchy copied to clipboard');
+  }, []);
+
+  // [S-032] 階層構造のペースト (Ctrl+V)
+  const onPasteHierarchy = useCallback(async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (!text.trim()) return;
+
+      const { nodes: pastedNodes, edges: pastedEdges } = parseHierarchyText(text);
+      if (pastedNodes.length === 0) return;
+
+      const selectedNode = nodesRef.current.find(n => n.selected);
+      const timestamp = Date.now();
+
+      ydoc.transact(() => {
+        // 1. 各ノードを登録
+        pastedNodes.forEach(node => {
+          yNodes.set(node.id, {
+            ...node,
+            width: 180,
+            height: 60,
+            selected: false,
+            position: { x: (selectedNode?.position.x || 0) + 360, y: node.position.y }
+          });
+        });
+
+        // 2. 内部の親子関係を登録
+        pastedEdges.forEach(edge => yEdges.set(edge.id, edge));
+
+        // 3. ペーストされたツリーのルートを現在の選択ノードに接続
+        const pastedNodeIds = new Set(pastedNodes.map(n => n.id));
+        const pastedRoots = pastedNodes.filter(n => !pastedEdges.some(e => e.target === n.id));
+        
+        if (selectedNode) {
+          pastedRoots.forEach((root, idx) => {
+            const edgeId = `edge-paste-link-${timestamp}-${idx}`;
+            yEdges.set(edgeId, { id: edgeId, source: selectedNode.id, target: root.id });
+          });
+        }
+
+        // 4. ペーストされた最初のノードを選択状態にする（ローカル）
+        setNodes(nds => nds.map(n => ({
+          ...n,
+          selected: n.id === pastedNodes[0].id
+        })));
+        setLastAddedNodeId(pastedNodes[0].id);
+
+      }, 'structural');
+      console.log(`[Clipboard] Pasted ${pastedNodes.length} nodes from clipboard`);
+    } catch (err) {
+      console.error('[Clipboard] Failed to read clipboard:', err);
+    }
+  }, [yNodes, yEdges, isAutoLayout, setNodes, setLastAddedNodeId]);
 
   // 選択された要素を削除する関数
   const onDeleteSelected = useCallback(() => {
@@ -932,6 +976,20 @@ function Flow() {
       if (['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return;
       if (['Enter', 'Insert', 'Delete', 'z', 'y'].includes(e.key)) console.log(`[Keyboard] Key pressed: ${e.key}`);
       
+      // [B-022] Copy/Paste Hierarchy
+      if (e.ctrlKey && e.key === 'c') {
+        // 入力要素にフォーカスがある場合は標準のコピーを許可
+        if (['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return;
+        e.preventDefault();
+        onCopyHierarchy();
+      }
+
+      if (e.ctrlKey && e.key === 'v') {
+        if (['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return;
+        e.preventDefault();
+        onPasteHierarchy();
+      }
+
       // Undo: Ctrl+Z
       if (e.ctrlKey && e.key === 'z') {
         e.preventDefault();
@@ -991,7 +1049,7 @@ function Flow() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown); // Cleanup
-  }, [undoManager, onAddStructuredNode, onDeleteSelected, isEdgeMode, edgeSourceId, yNodes, setIsEdgeMode, setEdgeSourceId, setFocusMode]);
+  }, [undoManager, onAddStructuredNode, onDeleteSelected, onCopyHierarchy, onPasteHierarchy, isEdgeMode, edgeSourceId, yNodes, setIsEdgeMode, setEdgeSourceId, setFocusMode]);
 
   // 全てのデータをリセットする関数
   const onReset = useCallback(() => {
