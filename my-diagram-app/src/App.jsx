@@ -64,8 +64,8 @@ const getLayoutedElements = (nodes, edges) => {
   let currentYOffset = 0;
   const verticalGap = 40; // [D-004] 垂直方向の隙間
   const horizontalStep = 360; // [D-015] 水平方向のステップ幅（ノード幅180 + 間隔180）
-  const nodeWidth = 180;
-  const nodeHeight = 60;
+  const NODE_WIDTH = 180;
+  const NODE_HEIGHT = 60;
 
   // 再帰的にサブツリーをレイアウトし、その「箱」の総高さを返す関数
   const layoutSubtree = (nodeId, x, y) => {
@@ -95,9 +95,9 @@ const getLayoutedElements = (nodes, edges) => {
       childrenBoxHeight -= verticalGap; // 最後の余白を削除
     }
 
-    const myHeight = Math.max(nodeHeight, childrenBoxHeight);
+    const myHeight = Math.max(NODE_HEIGHT, childrenBoxHeight);
     // 親を子たちの垂直方向の中央に配置
-    const myY = y + (myHeight / 2) - (nodeHeight / 2);
+    const myY = y + (myHeight / 2) - (NODE_HEIGHT / 2);
 
     finalNodePositions[nodeId] = { x, y: myY };
     return { height: myHeight };
@@ -126,12 +126,33 @@ const getLayoutedElements = (nodes, edges) => {
 
   return nodes.map((node) => ({
     ...node,
-    position: finalNodePositions[node.id] || node.position
+    position: finalNodePositions[node.id] || node.position,
+    width: NODE_WIDTH, // [修正] 明示的なサイズを保持
+    height: NODE_HEIGHT
   }));
 };
 
 const initialNodes = [];
 const initialEdges = [];
+
+// [D-027] 循環参照防止のための子孫チェックヘルパー
+const isDescendant = (nodes, edges, parentId, potentialChildId) => {
+  const adj = {};
+  edges.forEach(e => {
+    if (!adj[e.source]) adj[e.source] = [];
+    adj[e.source].push(e.target);
+  });
+  const queue = [parentId];
+  const visited = new Set();
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (current === potentialChildId) return true;
+    if (visited.has(current)) continue;
+    visited.add(current);
+    (adj[current] || []).forEach(child => queue.push(child));
+  }
+  return false;
+};
 
 function Flow() {
   const [nodes, setNodes, onNodesChangeState] = useNodesState(initialNodes);
@@ -142,7 +163,49 @@ function Flow() {
   const [lastAddedNodeId, setLastAddedNodeId] = useState(null);
   const [isEdgeMode, setIsEdgeMode] = useState(false); // [B-005] エッジ追加モード
   const [edgeSourceId, setEdgeSourceId] = useState(null); // [B-005] エッジの接続元ノードID
+  const [draggingNodeId, setDraggingNodeId] = useState(null); // [D-027] ドラッグ中のノードID
   const [focusMode, setFocusMode] = useState('none'); // [B-016] フォーカスモード
+  const [isStructureMode, setIsStructureMode] = useState(false); // [修正] 「構成」モードの状態管理
+
+  // [D-027] ハイライト状態を安定させ、チャタリングを防ぐためのRef
+  const lastTargetIdRef = React.useRef(null);
+  const lastSourceIdRef = React.useRef(null);
+
+  const clearHighlights = useCallback(() => {
+    document.querySelectorAll('.drag-target-highlight')
+      .forEach(el => el.classList.remove('drag-target-highlight'));
+    lastTargetIdRef.current = null;
+    lastSourceIdRef.current = null;
+  }, []);
+
+  // [修正] モードの切り替え（配置 ↔ 構成）をグローバルに監視
+  useEffect(() => {
+    const onKeyDown = (e) => { 
+      if (e.key === 'Shift' && !e.repeat) {
+        setIsStructureMode(true); 
+      }
+    };
+    const onKeyUp = (e) => { 
+      if (e.key === 'Shift') {
+        setIsStructureMode(false); 
+      } 
+    };
+    const onBlur = () => setIsStructureMode(false); // ウィンドウ切り替え時のスタック防止
+
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', onBlur);
+    };
+  }, []);
+
+  // [修正] モードが「構成」から外れたら即座に色をリセット
+  useEffect(() => {
+    if (!isStructureMode) clearHighlights();
+  }, [isStructureMode, clearHighlights]);
 
   // [D-014] キーボードナビゲーションを有効化
   useKeyboardNavigation(ydoc, nodes, edges, setNodes);
@@ -164,7 +227,7 @@ function Flow() {
 
   const selectedNodeId = useMemo(() => nodes.find(n => n.selected)?.id, [nodes]);
 
-  const { setCenter, getViewport, fitView } = useReactFlow();
+  const { setCenter, getViewport, fitView, getIntersectingNodes, getIntersectingEdges } = useReactFlow();
 
   // デフォルトのエッジオプションを定義
   const defaultEdgeOptions = useMemo(() => ({
@@ -220,10 +283,7 @@ function Flow() {
           if (change.type === 'remove') {
             yNodes.delete(change.id);
           } else if (change.type === 'select') {
-            const node = yNodes.get(change.id);
-            if (node && node.selected !== change.selected) {
-              yNodes.set(change.id, { ...node, selected: change.selected });
-            }
+            // セレクションはローカルで完結させるため Yjs には書き込まない
           } else if (!isAutoLayout && (change.type === 'position' || change.type === 'dimensions')) {
             const node = yNodes.get(change.id);
             if (node) {
@@ -251,8 +311,6 @@ function Flow() {
           if (change.type === 'remove') {
             yEdges.delete(change.id);
           } else if (change.type === 'select') {
-            const edge = yEdges.get(change.id);
-            if (edge) yEdges.set(change.id, { ...edge, selected: change.selected });
           }
         });
       }, hasStructuralChange ? 'structural' : 'local');
@@ -278,13 +336,6 @@ function Flow() {
 
       ydoc.transact(() => {
         yEdges.set(edgeId, newEdge);
-        // Yjs上でも選択を同期
-        yNodes.forEach((node, id) => {
-          if (node.selected) yNodes.set(id, { ...node, selected: false });
-        });
-        yEdges.forEach((edge, id) => {
-          if (edge.selected) yEdges.set(id, { ...edge, selected: false });
-        });
       }, 'structural');
     },
     [yNodes, yEdges, isAutoLayout, setNodes, setEdges]
@@ -297,10 +348,9 @@ function Flow() {
       event.stopPropagation(); // onPaneClickが発火するのを防ぐ
 
       ydoc.transact(() => {
-        // 既存の選択状態やエッジソース候補をクリア
         yNodes.forEach((n, id) => {
-          if (n.selected || n.isEdgeSourceCandidate) {
-            yNodes.set(id, { ...n, selected: false, isEdgeSourceCandidate: false });
+          if (n.isEdgeSourceCandidate) {
+            yNodes.set(id, { ...n, isEdgeSourceCandidate: false });
           }
         });
 
@@ -315,7 +365,7 @@ function Flow() {
           // [修正] 接続先（ターゲット）ノードを選択状態にする
           const targetNode = yNodes.get(node.id);
           if (targetNode) {
-            yNodes.set(node.id, { ...targetNode, selected: true, isEdgeSourceCandidate: false });
+            yNodes.set(node.id, { ...targetNode, isEdgeSourceCandidate: false });
           }
 
           // [修正] 接続元（ソース）の候補フラグを確実に折る
@@ -338,10 +388,10 @@ function Flow() {
   const onPaneClick = useCallback(() => {
     if (isEdgeMode && (edgeSourceId || isEdgeMode)) { // edgeSourceIdがあるか、モードがONなら
       ydoc.transact(() => {
-        // 接続元候補と全ての選択状態をクリア
+        // 接続元候補のみをクリア（セレクションは各ユーザーのローカルで管理）
         yNodes.forEach((n, id) => {
-          if (n.selected || n.isEdgeSourceCandidate) {
-            yNodes.set(id, { ...n, selected: false, isEdgeSourceCandidate: false });
+          if (n.isEdgeSourceCandidate) {
+            yNodes.set(id, { ...n, isEdgeSourceCandidate: false });
           }
         });
       }, 'structural');
@@ -388,6 +438,162 @@ function Flow() {
       });
     }, 'structural');
   }, [yNodes, yEdges]);
+
+  // [D-027] ノード直接移動（Drag-and-Drop Re-parenting）のハンドラ
+  const onNodeDragStart = useCallback((event, node) => {
+    setDraggingNodeId(node.id);
+  }, [setDraggingNodeId]);
+
+  const onNodeDrag = useCallback((event, node) => {
+    const currentMode = isStructureMode || event.shiftKey;
+    if (!currentMode) {
+      if (lastSourceIdRef.current || lastTargetIdRef.current) clearHighlights();
+      return;
+    }
+    
+    const nodeWithDimensions = {
+      ...node,
+      width: node.width || 180,
+      height: node.height || 60,
+    };
+
+    // 2. ターゲット（重ね先）の判定
+    const intersections = getIntersectingNodes(nodeWithDimensions, true);
+    const targetNode = intersections.find(n => n.id !== node.id && !isDescendant(nodesRef.current, edgesRef.current, node.id, n.id));
+    const targetId = targetNode?.id || null;
+    
+    // ターゲットが前回と異なる場合のみ DOM を更新（チャタリング防止）
+    if (targetId !== lastTargetIdRef.current) {
+      // 旧ハイライト消去
+      if (lastTargetIdRef.current) {
+        const oldEl = document.querySelector(`[data-id="${lastTargetIdRef.current}"]`) || 
+                      document.querySelector(`[data-testid="rf__edge-${lastTargetIdRef.current}"]`);
+        oldEl?.classList.remove('drag-target-highlight');
+      }
+      
+      // 新ハイライト適用
+      if (targetId) {
+        const newEl = document.querySelector(`[data-id="${targetId}"]`);
+        newEl?.classList.add('drag-target-highlight');
+        lastTargetIdRef.current = targetId;
+      } else if (typeof getIntersectingEdges === 'function') {
+        const edgeIntersections = getIntersectingEdges(nodeWithDimensions, true);
+        const targetEdge = edgeIntersections?.[0];
+        if (targetEdge) {
+          const edgeEl = document.querySelector(`[data-testid="rf__edge-${targetEdge.id}"]`);
+          edgeEl?.classList.add('drag-target-highlight');
+          lastTargetIdRef.current = targetEdge.id;
+        } else {
+          lastTargetIdRef.current = null;
+        }
+      } else {
+        lastTargetIdRef.current = null;
+      }
+    }
+  }, [getIntersectingNodes, getIntersectingEdges, nodesRef, edgesRef, clearHighlights, isStructureMode]);
+
+  const onNodeDragStop = useCallback((event, node) => {
+    setDraggingNodeId(null);
+    clearHighlights(); // ドロップ時に必ずハイライトをリセット
+
+    // [重要] 構造変更の確定判断も管理下のステートに寄せる
+    const isStructuralChange = isStructureMode;
+
+    // [D-027] 自動レイアウトONの場合は、通常のドラッグ後もスナップバックさせるために structural を使用
+    const origin = (isStructuralChange || isAutoLayout) ? 'structural' : 'local';
+
+    // [修正] nodeオブジェクトに確実に寸法を持たせてから交差判定を行う
+    const nodeWithDimensions = {
+      ...node,
+      width: node.width || 180,
+      height: node.height || 60,
+    };
+
+    // [修正] 第二引数に true を渡し、一部でも重なれば検知するようにする
+    const intersections = isStructuralChange ? getIntersectingNodes(nodeWithDimensions, true) : [];
+
+    // 自分自身や自分の子孫でないノードをターゲットにする
+    const targetNode = intersections.find(n => n.id !== node.id && !isDescendant(nodesRef.current, edgesRef.current, node.id, n.id));
+
+    ydoc.transact(() => {
+      // [S-027] 座標の確定: 配置モードでも自動レイアウトの並び順に反映させるため常に保存する
+      const yNode = yNodes.get(node.id);
+      if (yNode) {
+        yNodes.set(node.id, { ...yNode, position: node.position });
+      }
+
+      // [S-028] Shiftキーが押されている場合のみ構造変更を実行
+      if (isStructuralChange) {
+        if (targetNode) {
+        // [D-027] ノードへのドロップ: 新しい親にする
+        const currentEdges = Array.from(yEdges.values()).filter(Boolean);
+        const existingParentEdges = currentEdges.filter(e => e.target === node.id);
+        
+        // ドロップ先が現在の親でない場合のみエッジを張り替える
+        if (!existingParentEdges.some(e => e.source === targetNode.id)) {
+          // 全ての既存の親との接続を削除
+          existingParentEdges.forEach(e => yEdges.delete(e.id));
+          
+          const newEdgeId = `edge-dnd-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
+          const newEdge = { 
+            id: newEdgeId, 
+            source: targetNode.id, 
+            target: node.id,
+            sourceHandle: null,
+            targetHandle: null 
+          };
+          yEdges.set(newEdgeId, newEdge);
+
+          // 自動レイアウト時の順序ヒント: 兄弟リストの末尾に配置
+          if (isAutoLayout && yNode) {
+            const siblings = currentEdges
+              .filter(e => e.source === targetNode.id && e.target !== node.id)
+              .map(e => yNodes.get(e.target))
+              .filter(Boolean);
+            const maxY = siblings.reduce((max, n) => Math.max(max, n.position?.y || 0), 0);
+            yNodes.set(node.id, { ...yNode, position: { x: node.position.x, y: maxY + 1 } });
+          }
+        }
+      } else {
+        // ノードへのドロップがない場合、エッジへのドロップを確認
+        const edgeIntersections = typeof getIntersectingEdges === 'function' ? getIntersectingEdges(nodeWithDimensions, true) : [];
+        if (edgeIntersections.length > 0) {
+          const targetEdge = edgeIntersections[0];
+
+          // 自分の子孫を含むエッジへの割り込みは禁止（サイクル防止）
+          if (isDescendant(nodesRef.current, edgesRef.current, node.id, targetEdge.source)) return;
+          // 自分の直属のエッジには割り込めない
+          if (targetEdge.source === node.id || targetEdge.target === node.id) return;
+
+          const currentEdges = Array.from(yEdges.values()).filter(Boolean);
+          const existingParentEdges = currentEdges.filter(e => e.target === node.id);
+
+          // 全ての既存の親との接続を削除
+          existingParentEdges.forEach(e => yEdges.delete(e.id));
+
+          // 既存エッジを削除して間に挟む
+          const { source: sourceId, target: targetId } = targetEdge;
+          yEdges.delete(targetEdge.id);
+          
+          const e1Id = `edge-dnd-pre-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
+          const e2Id = `edge-dnd-post-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
+          
+          yEdges.set(e1Id, { id: e1Id, source: sourceId, target: node.id, sourceHandle: null, targetHandle: null });
+          yEdges.set(e2Id, { id: e2Id, source: node.id, target: targetId, sourceHandle: null, targetHandle: null });
+
+          // 自動レイアウトのヒントとしてターゲットノードの座標を参考に設定
+          const targetNodeObj = nodesRef.current.find(n => n.id === targetId);
+          if (isAutoLayout && yNode && targetNodeObj) {
+            yNodes.set(node.id, { ...yNode, position: { x: node.position.x, y: targetNodeObj.position.y - 0.5 } });
+          }
+        } else {
+          // 空きスペースへのドロップ時は、座標の保存のみ行われ、自動レイアウトにより順序が更新される
+        }
+      }
+    }
+  }, origin);
+  }, [getIntersectingNodes, getIntersectingEdges, isAutoLayout, yNodes, yEdges, yProjectMeta, nodesRef, edgesRef, isStructureMode, clearHighlights]);
+
 
   // MarkdownからIDとタイトルを抽出するヘルパー
   const extractMetadata = (text) => {
@@ -492,6 +698,8 @@ function Flow() {
         type: 'custom',
         data: { label: `[${id}] ${title}` },
         position: { x: 0, y: idx * 10 }, // [D-004] 初期順序を座標で付与
+        width: 180,
+        height: 60,
       }));
 
       const newEdges = importedMapping.map((link, idx) => ({
@@ -550,6 +758,8 @@ function Flow() {
         type: 'custom',
         data: { label: `[${id}] ${title}` },
         position: { x: 0, y: idx * 10 }, // [D-004] 初期順序を座標で付与
+        width: 180,
+        height: 60,
       }));
 
       const newEdges = mappingData.map((link, index) => ({
@@ -597,6 +807,8 @@ function Flow() {
       data: { label },
       position: { x: 0, y: maxY + 10 }, 
       selected: true,
+      width: 180,
+      height: 60,
     };
 
     // 即座にローカルステートに反映（syncStateがlocal originを無視するため必要）
@@ -610,11 +822,8 @@ function Flow() {
     edgesRef.current = nextEdges;
 
     ydoc.transact(() => {
-      yNodes.set(id, newNode);
-      yNodes.forEach((node, nodeId) => {
-        if (nodeId !== id && node.selected) yNodes.set(nodeId, { ...node, selected: false });
-      });
-      yEdges.forEach((edge, edgeId) => { if (edge.selected) yEdges.set(edgeId, { ...edge, selected: false }); });
+      // 共有データ上は selected: false として保存し、ローカルでのみ選択状態(true)を維持する
+      yNodes.set(id, { ...newNode, selected: false });
     }, 'structural');
 
     setLastAddedNodeId(id);
@@ -664,6 +873,8 @@ function Flow() {
         data: { label: 'Parent Node' },
         position: { x: selectedNode.position.x - 360, y: selectedNode.position.y },
         selected: true,
+        width: 180,
+        height: 60,
       };
 
       const edgesToAdd = [];
@@ -689,16 +900,9 @@ function Flow() {
       edgesRef.current = nextEdges;
 
       ydoc.transact(() => {
-        yNodes.set(nodeId, newNode);
+        yNodes.set(nodeId, { ...newNode, selected: false }); // 共有データ上は selected を持たない
         edgesToAdd.forEach(e => yEdges.set(e.id, e));
         incomingEdges.forEach(e => yEdges.delete(e.id));
-        
-        yNodes.forEach((node, id) => {
-          if (id !== nodeId && node.selected) yNodes.set(id, { ...node, selected: false });
-        });
-        yEdges.forEach((edge, id) => {
-          if (edge.selected) yEdges.set(id, { ...edge, selected: false });
-        });
       }, 'structural');
 
       setLastAddedNodeId(nodeId);
@@ -758,6 +962,8 @@ function Flow() {
       data: { label: `${mode === 'child' ? 'Child' : 'Sibling'} Node` },
       position: { x: selectedNode.position.x + 360, y: targetY },
       selected: true,
+      width: 180,
+      height: 60,
     };
     const newEdge = parentId ? { id: edgeId, source: parentId, target: nodeId } : null;
 
@@ -774,12 +980,8 @@ function Flow() {
     edgesRef.current = nextEdges;
 
     ydoc.transact(() => {
-      yNodes.set(nodeId, newNode);
+      yNodes.set(nodeId, { ...newNode, selected: false });
       if (newEdge) yEdges.set(edgeId, newEdge);
-      yNodes.forEach((node, id) => {
-        if (id !== nodeId && node.selected) yNodes.set(id, { ...node, selected: false });
-      });
-      yEdges.forEach((edge, id) => { if (edge.selected) yEdges.set(id, { ...edge, selected: false }); });
     }, 'structural');
 
     setLastAddedNodeId(nodeId);
@@ -841,9 +1043,7 @@ function Flow() {
         if (isEdgeMode) {
           e.preventDefault();
           ydoc.transact(() => {
-            yNodes.forEach((n, id) => {
-              if (n.selected || n.isEdgeSourceCandidate) yNodes.set(id, { ...n, selected: false, isEdgeSourceCandidate: false });
-            });
+            yNodes.forEach((n, id) => { if (n.isEdgeSourceCandidate) yNodes.set(id, { ...n, isEdgeSourceCandidate: false }); });
           }, 'structural');
           setEdgeSourceId(null);
           setIsEdgeMode(false);
@@ -874,13 +1074,11 @@ function Flow() {
       
       const nodesArray = Array.from(yNodes.values());
       const edgesArray = Array.from(yEdges.values());
-
-      const metaName = yProjectMeta.get('name');
-      if (metaName) setProjectName(metaName);
+      if (yProjectMeta.get('name')) setProjectName(yProjectMeta.get('name'));
 
       // [B-016] フォーカス対象（到達可能セット）の算出
       const focusSet = (focusMode === 'none') ? null : (() => {
-        const selected = nodesArray.find(n => n.selected);
+        const selected = nodesArray.find(n => n.selected) || nodesRef.current.find(n => n.selected);
         if (!selected) return null;
         const nodeIds = new Set([selected.id]);
         const edgeIds = new Set();
@@ -905,32 +1103,33 @@ function Flow() {
         return {nodeIds, edgeIds};
       })();
 
-      setNodes((currentNodes) => {
-        const mergedNodes = nodesArray.map((yNode) => {
-          const isHidden = focusSet ? !focusSet.nodeIds.has(yNode.id) : false;
-          // 選択状態はトップレベル、エッジソース候補は data 内に含めて CustomNode へ渡す
-          return { 
-            ...yNode, 
-            selected: !!yNode.selected,
-            hidden: isHidden,
-            data: { 
-              ...yNode.data, 
-              isEdgeSourceCandidate: !!yNode.isEdgeSourceCandidate 
-            } 
-          };
-        });
-
-        // エッジのhidden状態も計算
-        const updatedEdges = edgesArray.map(e => ({
-          ...e,
-          hidden: focusSet ? !focusSet.edgeIds.has(e.id) : false
-        }));
-        setEdges(updatedEdges);
-
-        return isAutoLayout && mergedNodes.length > 0
-          ? getLayoutedElements(mergedNodes, updatedEdges)
-          : mergedNodes;
+      const nextNodes = nodesArray.map((yNode) => {
+        const localNode = nodesRef.current.find(n => n.id === yNode.id);
+        return {
+          ...yNode,
+          width: 180,
+          height: 60,
+          selected: localNode ? localNode.selected : false, // ローカルの選択状態を優先
+          hidden: focusSet ? !focusSet.nodeIds.has(yNode.id) : false,
+          data: { ...yNode.data, isEdgeSourceCandidate: !!yNode.isEdgeSourceCandidate }
+        };
       });
+
+      const nextEdges = edgesArray.map(e => {
+        const localEdge = edgesRef.current.find(ee => ee.id === e.id);
+        return {
+        ...e,
+        selected: localEdge ? localEdge.selected : false,
+        hidden: focusSet ? !focusSet.edgeIds.has(e.id) : false
+        };
+      });
+
+      const finalNodes = isAutoLayout && nextNodes.length > 0
+        ? getLayoutedElements(nextNodes, nextEdges)
+        : nextNodes;
+
+      setNodes(finalNodes);
+      setEdges(nextEdges);
     };
 
     // 初期ロード
@@ -998,19 +1197,51 @@ function Flow() {
           width: 20px;
           height: 20px;
         }
+        /* 通常時のノードスタイル */
+        .custom-node {
+          border: 1px solid #777;
+          transition: border-color 0.2s, box-shadow 0.2s;
+        }
+        /* 選択時の強調（赤枠） */
+        .custom-node.selected {
+          border: 2px solid #ff4d4d !important;
+          box-shadow: 0 0 10px rgba(255, 77, 77, 0.5) !important;
+        }
+        /* エッジ接続元の候補（青枠） */
+        .custom-node.edge-source-candidate {
+          border: 3px solid #3b82f6 !important;
+          box-shadow: 0 0 15px rgba(59, 130, 246, 0.6) !important;
+        }
+        /* [D-027] ドラッグターゲットのハイライト */
+        .drag-target-highlight {
+          box-shadow: 0 0 0 4px #3b82f6 !important;
+          border-color: #3b82f6 !important;
+          stroke: #3b82f6 !important;
+        }
+        /* 構成モード時にドラッグしている本人のスタイルを上書き（薄い赤） */
+        .structure-mode-active .react-flow__node.dragging .custom-node {
+          background: #fffafa !important;
+          border: 2px solid #feb2b2 !important;
+          box-shadow: 0 0 10px rgba(254, 178, 178, 0.4) !important;
+        }
       `}</style>
       <ReactFlow
+        className={isStructureMode ? 'structure-mode-active' : ''} // クラスを動的に付与
         nodes={nodes}
         edges={edges}
         onNodesChange={onNodesChange}
         onNodeClick={onNodeClick} // [B-005] ノードクリックハンドラを追加
         onPaneClick={onPaneClick} // [B-005] キャンバスクリックハンドラを追加
         onEdgesChange={onEdgesChange}
+        onNodeDragStart={onNodeDragStart}
+        onNodeDrag={onNodeDrag}
+        onNodeDragStop={onNodeDragStop}
         onConnect={onConnect}
         style={{ cursor: isEdgeMode ? 'crosshair' : 'inherit' }}
         nodeTypes={nodeTypes}
         defaultEdgeOptions={defaultEdgeOptions}
-        nodesDraggable={!isAutoLayout}
+        // [S-028] 常にドラッグ自体は可能にする（自動レイアウト時はShift+ドラッグで構造編集するため）
+        nodesDraggable={true} 
         zoomOnDoubleClick={false}
         fitView
       >
@@ -1137,8 +1368,8 @@ function Flow() {
             onClick={() => {
               setIsEdgeMode(!isEdgeMode);
               setEdgeSourceId(null); // モード切り替え時に接続元をリセット
-              ydoc.transact(() => { // 既存の候補/選択状態をクリア
-                yNodes.forEach((n, id) => { if (n.selected || n.isEdgeSourceCandidate) yNodes.set(id, { ...n, selected: false, isEdgeSourceCandidate: false }); });
+              ydoc.transact(() => { // 既存の候補状態をクリア
+                yNodes.forEach((n, id) => { if (n.isEdgeSourceCandidate) yNodes.set(id, { ...n, isEdgeSourceCandidate: false }); });
               }, 'structural');
             }}
             style={{ backgroundColor: isEdgeMode ? '#3b82f6' : '#fff', color: isEdgeMode ? '#fff' : '#3b82f6', border: `2px solid ${isEdgeMode ? '#3b82f6' : '#e2e8f0'}`, borderRadius: '4px', cursor: 'pointer' }}

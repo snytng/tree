@@ -191,20 +191,9 @@ export const useKeyboardNavigation = (ydoc, nodes, edges, setNodes) => {
           }))
         );
 
-        ydoc.transact(() => {
-          // 全ユーザーに対して選択状態を同期
-          nodes.forEach(n => {
-            if (n.selected) {
-              const val = yNodes.get(n.id);
-              if (val) yNodes.set(n.id, { ...val, selected: false });
-            }
-          });
-          const nextVal = yNodes.get(bestNode.id);
-          if (nextVal) yNodes.set(bestNode.id, { ...nextVal, selected: true });
-
-          // 固定サイズ (180x60) の中心に合わせてカメラを移動
-          setCenter(bestNode.position.x + 90, bestNode.position.y + 30, { zoom: 1, duration: 150 });
-        }, 'local');
+        // [D-014] 固定サイズ (180x60) の中心に合わせてカメラを移動
+        // セレクションはローカルステートのみで管理するため Yjs への書き込みは不要
+        setCenter(bestNode.position.x + 90, bestNode.position.y + 30, { zoom: 1, duration: 150 });
 
         // DOM要素にフォーカスを当て、連続したキー操作を確実に受け取れるようにする
         const element = document.querySelector(`[data-id="${bestNode.id}"]`);

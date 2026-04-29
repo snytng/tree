@@ -69,11 +69,9 @@ const CustomNode = ({ id, data, selected }) => {
         padding: '10px',
         borderRadius: '5px',
         background: '#fff',
-        border: selected ? '2px solid #ff4d4d' : (isEdgeSourceCandidate ? '3px solid #3b82f6' : '1px solid #777'), // 候補時は太い青枠
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        boxShadow: selected ? '0 0 10px rgba(255, 77, 77, 0.5)' : (isEdgeSourceCandidate ? '0 0 15px rgba(59, 130, 246, 0.6)' : 'none') // 候補時は青く光る
       }}
     >
       <Handle type="target" position={Position.Left} />
