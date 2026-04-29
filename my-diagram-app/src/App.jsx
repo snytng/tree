@@ -22,13 +22,9 @@ import { IndexeddbPersistence } from 'y-indexeddb';
 import { useKeyboardNavigation } from './hooks/useKeyboardNavigation';
 import { useNodeEditor } from './hooks/useNodeEditor';
 import CustomNode from './hooks/CustomNode';
+import { useFileIO } from './hooks/useFileIO';
 import { getLayoutedElements } from './utils/layoutEngine';
 import { isDescendant, parseHierarchyText, generateHierarchyText } from './utils/graphUtils';
-import mappingData from '../mapping.json';
-import JSZip from 'jszip';
-
-import specRaw from '../spec.md?raw';
-import designRaw from '../design.md?raw';
 
 const ROOM_NAME = 'react-flow-demo-room';
 // Yjsドキュメントの初期化
@@ -102,6 +98,14 @@ function Flow() {
   // [B-001] インライン編集と Markdown 同期を有効化
   useNodeEditor(ydoc);
 
+  // Yjsの共有型（Map）を取得。IDをキーにすることで、個別の要素を効率的に同期できる
+  const yNodes = ydoc.getMap('nodes');
+  const yEdges = ydoc.getMap('edges');
+  const yProjectMeta = ydoc.getMap('projectMeta'); // プロジェクト名などのメタデータ用
+
+  // [B-019] 単一テキストファイル入出力
+  const { exportProject, importProject } = useFileIO(yNodes, yEdges, yProjectMeta, projectName);
+
   // nodeTypesをコンポーネント内でmemo化して参照を安定させる
   const nodeTypes = useMemo(() => ({
     custom: CustomNode,
@@ -127,12 +131,6 @@ function Flow() {
       color: '#333', // 矢印の色
     },
   }), []);
-
-  // Yjsの共有型（Map）を取得。IDをキーにすることで、個別の要素を効率的に同期できる
-  const yNodes = ydoc.getMap('nodes');
-  const yEdges = ydoc.getMap('edges');
-  const yProjectFiles = ydoc.getMap('projectFiles'); // 動的なファイル保存用
-  const yProjectMeta = ydoc.getMap('projectMeta'); // プロジェクト名などのメタデータ用
 
   // UndoManagerの設定
   const undoManager = useMemo(() => new Y.UndoManager([yNodes, yEdges], {
@@ -576,198 +574,6 @@ function Flow() {
   }, origin);
   }, [getIntersectingNodes, getIntersectingEdges, isAutoLayout, yNodes, yEdges, yProjectMeta, nodesRef, edgesRef, isStructureMode, clearHighlights]);
 
-
-  // MarkdownからIDとタイトルを抽出するヘルパー
-  const extractMetadata = (text) => {
-    // ## {セクション番号}. [ID] タイトル という形式に対応 (行頭マッチングを強化)
-    const regex = /^\s*##.*\[([A-Z]-\d{3})\]\s*(.*)$/gm;
-    const metadata = {};
-    let match;
-    while ((match = regex.exec(text)) !== null) {
-      metadata[match[1]] = match[2].trim();
-    }
-    return metadata;
-  };
-
-  // プロジェクトのエクスポート (ZIP出力)
-  const onExportProject = useCallback(async () => {
-    const zip = new JSZip();
-    
-    // Markdownファイルの再構築と保存
-    // yProjectFilesにデータがあればそれを使用、なければ現在のノードから再構築
-    const exportedSpecContent = [];
-    const exportedDesignContent = [];
-
-    nodesRef.current.forEach(node => {
-      if (node.id.startsWith('S-')) {
-        exportedSpecContent.push(`## [${node.id}] ${node.data.label.replace(`${node.id}: `, '')}`);
-      } else if (node.id.startsWith('D-')) {
-        exportedDesignContent.push(`## [${node.id}] ${node.data.label.replace(`${node.id}: `, '')}`);
-      }
-    });
-
-    // 既存のyProjectFilesの内容を優先しつつ、ノードから再構築した内容を追加
-    const finalSpecContent = yProjectFiles.get('spec.md') || exportedSpecContent.join('\n\n');
-    const finalDesignContent = yProjectFiles.get('design.md') || exportedDesignContent.join('\n\n');
-
-    if (finalSpecContent) {
-      zip.file('spec.md', finalSpecContent);
-    }
-    if (finalDesignContent) {
-      zip.file('design.md', finalDesignContent);
-    }
-
-    // その他のyProjectFilesに保存されているファイルも追加
-    yProjectFiles.forEach((content, filename) => {
-      if (!['spec.md', 'design.md'].includes(filename)) { // spec.mdとdesign.mdは上記で処理済み
-        zip.file(filename, content);
-      }
-    });
-
-    // mapping.json の動的生成
-    const currentMapping = edgesRef.current.map(edge => ({
-      from: edge.source,
-      to: edge.target,
-      type: edge.label || 'realizes'
-    }));
-    zip.file('mapping.json', JSON.stringify(currentMapping, null, 2));
-    const blob = await zip.generateAsync({ type: 'blob' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `${projectName || 'project'}-${Date.now()}.zip`;
-    link.click();
-  }, [yProjectFiles, projectName]); // Ref参照のためnodes, edgesを除去
-
-  // プロジェクトのインポート (ZIP読み込み)
-  const onImportProject = useCallback(async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-
-    console.group('📂 Project Import Debug');
-    console.log('1. Selected File:', file.name, `(${file.size} bytes)`);
-
-    try {
-      const zip = await JSZip.loadAsync(file);
-      const filesData = {};
-      let importedMapping = [];
-
-      console.log('2. Unzipping files...');
-      for (const [filename, zipEntry] of Object.entries(zip.files)) {
-        if (zipEntry.dir) continue;
-        const content = await zipEntry.async('string');
-        const baseName = filename.split('/').pop(); // フォルダ階層を無視してファイル名のみ取得
-        
-        if (baseName === 'mapping.json') {
-          console.log('   - Found mapping.json');
-          importedMapping = JSON.parse(content);
-        } else if (baseName.endsWith('.md')) {
-          console.log(`   - Found Markdown: ${baseName}`);
-          filesData[baseName] = content;
-        }
-      }
-
-      const allMetadata = {};
-      Object.values(filesData).forEach(content => {
-        Object.assign(allMetadata, extractMetadata(content));
-      });
-
-      console.log('3. Extracted IDs:', Object.keys(allMetadata));
-      console.log('4. Mapping entries:', importedMapping.length);
-
-      const newNodes = Object.entries(allMetadata).map(([id, title], idx) => ({
-        id,
-        type: 'custom',
-        data: { label: `[${id}] ${title}` },
-        position: { x: 0, y: idx * 10 }, // [D-004] 初期順序を座標で付与
-        width: 180,
-        height: 60,
-      }));
-
-      const newEdges = importedMapping.map((link, idx) => ({
-        id: `e-${idx}`,
-        source: link.from,
-        target: link.to,
-        label: link.type,
-      }));
-
-      console.log('5. Final data structure:', { nodes: newNodes.length, edges: newEdges.length });
-
-      const newProjectName = file.name.replace('.zip', '');
-      setProjectName(newProjectName); // 手元のステートを即座に更新
-
-      // 描画後に全体が収まるように調整
-      setTimeout(() => fitView({ duration: 800, padding: 0.2 }), 100);
-
-      ydoc.transact(() => {
-        yProjectMeta.set('name', newProjectName);
-        yProjectFiles.clear();
-        Object.entries(filesData).forEach(([name, content]) => {
-          yProjectFiles.set(name, content);
-        });
-
-        yNodes.clear();
-        newNodes.forEach(node => yNodes.set(node.id, node));
-
-        yEdges.clear();
-        newEdges.forEach(edge => yEdges.set(edge.id, edge));
-      }, 'local');
-      
-      console.log('✅ Project imported successfully');
-    } catch (error) {
-      console.error('❌ Error importing project:', error);
-    } finally {
-      console.groupEnd();
-    }
-  }, [yNodes, yEdges, yProjectFiles, yProjectMeta, isAutoLayout, setProjectName, fitView]);
-
-  // ドキュメントツリーをインポートする関数
-  const onImportDocTree = useCallback(() => {
-    console.log('onImportDocTree: Started');
-    try {
-      // yProjectFilesが空ならデフォルト（内蔵MD）を使用
-      const hasDynamicFiles = yProjectFiles.size > 0;
-      const specContent = hasDynamicFiles ? (yProjectFiles.get('spec.md') || specRaw) : specRaw;
-      const designContent = hasDynamicFiles ? (yProjectFiles.get('design.md') || designRaw) : designRaw;
-
-      const docMetadata = {
-        ...extractMetadata(specContent),
-        ...extractMetadata(designContent)
-      };
-
-      const newNodes = Object.entries(docMetadata).map(([id, title], idx) => ({
-        id,
-        type: 'custom',
-        data: { label: `[${id}] ${title}` },
-        position: { x: 0, y: idx * 10 }, // [D-004] 初期順序を座標で付与
-        width: 180,
-        height: 60,
-      }));
-
-      const newEdges = mappingData.map((link, index) => ({
-        id: `e-doc-${index}`,
-        source: link.from,
-        target: link.to,
-        label: link.type,
-      }));
-
-      console.log('onImportDocTree: Data generated', { nodesCount: newNodes.length, edgesCount: newEdges.length });
-
-      // 全体が収まるように調整
-      setTimeout(() => fitView({ duration: 800, padding: 0.2 }), 100);
-
-      // 2. Yjsに共有
-      ydoc.transact(() => {
-        newNodes.forEach(node => yNodes.set(node.id, node));
-        newEdges.forEach(edge => yEdges.set(edge.id, edge));
-      }, 'local');
-
-      setIsAutoLayout(true);
-      console.log('onImportDocTree: Success');
-    } catch (error) {
-      console.error('onImportDocTree: Error occurred', error);
-    }
-  }, [yNodes, yEdges, yProjectFiles, setIsAutoLayout, fitView]);
 
   // ノードを追加する関数
   const onAddNode = useCallback(() => {
@@ -1298,9 +1104,9 @@ function Flow() {
           </button>
           <label className="btn-icon" data-tooltip="プロジェクト・インポート" style={{ backgroundColor: '#fff', border: '2px solid #4caf50', borderRadius: '4px', cursor: 'pointer', color: '#4caf50' }}>
             <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
-            <input type="file" accept=".zip" onChange={onImportProject} style={{ display: 'none' }} />
+            <input type="file" accept=".md" onChange={(e) => importProject(e.target.files[0])} style={{ display: 'none' }} />
           </label>
-          <button className="btn-icon" data-tooltip="プロジェクト・エクスポート" onClick={onExportProject} style={{ backgroundColor: '#fff', border: '2px solid #4caf50', color: '#4caf50', borderRadius: '4px', cursor: 'pointer' }}>
+          <button className="btn-icon" data-tooltip="プロジェクト・エクスポート" onClick={exportProject} style={{ backgroundColor: '#fff', border: '2px solid #4caf50', color: '#4caf50', borderRadius: '4px', cursor: 'pointer' }}>
             <svg viewBox="0 0 24 24" fill="currentColor"><path d="M5 20h14v-2H5v2zM19 11l-7-7-7 7h4v6h6v-6h4z"/></svg>
           </button>
           <button className="btn-icon" data-tooltip="元に戻す (Ctrl+Z)" onClick={() => undoManager.undo()} disabled={!canUndo} style={{ backgroundColor: '#fff', border: `2px solid ${canUndo ? '#64748b' : '#e2e8f0'}`, color: canUndo ? '#64748b' : '#e2e8f0', borderRadius: '4px', cursor: canUndo ? 'pointer' : 'not-allowed', opacity: canUndo ? 1 : 0.5 }}>
