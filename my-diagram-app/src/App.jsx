@@ -20,6 +20,8 @@ import { WebrtcProvider } from 'y-webrtc';
 import { WebsocketProvider } from 'y-websocket'; // y-websocketはApp.jsxで直接使用するため、ルートのpackage.jsonにも必要
 import { IndexeddbPersistence } from 'y-indexeddb';
 import { useKeyboardNavigation } from './hooks/useKeyboardNavigation';
+import { useViewSync } from './hooks/useViewSync';
+import ViewSyncToolbar from './components/ViewSyncToolbar';
 import { useNodeEditor } from './hooks/useNodeEditor';
 import CustomNode from './hooks/CustomNode';
 import { useFileIO } from './hooks/useFileIO';
@@ -103,6 +105,11 @@ function Flow() {
   const yEdges = ydoc.getMap('edges');
   const yProjectMeta = ydoc.getMap('projectMeta'); // プロジェクト名などのメタデータ用
 
+  const selectedNodeId = useMemo(() => nodes.find(n => n.selected)?.id, [nodes]);
+
+  // [B-024] 視点同期（プレゼンテーションモード）を有効化
+  const viewSync = useViewSync(yProjectMeta, ydoc.clientID, selectedNodeId);
+
   // [B-019] 単一テキストファイル入出力
   const { exportProject, importProject } = useFileIO(yNodes, yEdges, yProjectMeta, projectName);
 
@@ -118,9 +125,7 @@ function Flow() {
   useEffect(() => { nodesRef.current = nodes; }, [nodes]);
   useEffect(() => { edgesRef.current = edges; }, [edges]);
 
-  const selectedNodeId = useMemo(() => nodes.find(n => n.selected)?.id, [nodes]);
-
-  const { setCenter, getViewport, fitView, getIntersectingNodes, getIntersectingEdges } = useReactFlow();
+  const { setCenter, getViewport, fitView, getIntersectingNodes, getIntersectingEdges, flowToScreenPosition } = useReactFlow();
 
   // デフォルトのエッジオプションを定義
   const defaultEdgeOptions = useMemo(() => ({
@@ -413,6 +418,19 @@ function Flow() {
           setNodes(layouted.map(n => 
             n.id === node.id ? { ...n, position: node.position } : n
           ));
+
+          // [B-024] プレゼンターの場合は、避けるノードの動きも他ユーザーへ同期
+          if (viewSync.isPresenter) {
+            ydoc.transact(() => {
+              layouted.forEach(n => {
+                const yNode = yNodes.get(n.id);
+                // 位置が実際に変わっているノードのみ更新
+                if (yNode && (Math.abs(yNode.position.x - n.position.x) > 0.5 || Math.abs(yNode.position.y - n.position.y) > 0.5)) {
+                  yNodes.set(n.id, { ...yNode, position: n.position });
+                }
+              });
+            }, 'local'); // local origin で送信（自分側での再レイアウトを抑制）
+          }
         }
       }
       return;
@@ -466,8 +484,9 @@ function Flow() {
     // [重要] 構造変更の確定判断も管理下のステートに寄せる
     const isStructuralChange = isStructureMode;
 
-    // [D-027] 自動レイアウトONの場合は、通常のドラッグ後もスナップバックさせるために structural を使用
-    const origin = (isStructuralChange || isAutoLayout) ? 'structural' : 'local';
+    // [修正] ドラッグ停止時は、現在の全ノードの座標を「確定値」として保存するために structural を使用
+    // これにより、手動モードでの座標が選択変更時にリセットされるのを防ぐ
+    const origin = 'structural';
 
     // [修正] nodeオブジェクトに確実に寸法を持たせてから交差判定を行う
     const nodeWithDimensions = {
@@ -486,19 +505,23 @@ function Flow() {
     const tempNodes = nodesRef.current.map(n => 
       n.id === node.id ? { ...n, position: node.position } : n
     );
-    const finalLayout = isAutoLayout ? getLayoutedElements(tempNodes, edgesRef.current) : tempNodes;
+
+    // [D-029] レイアウト結果を取得（ONなら計算値、OFFなら現在の移動後ステート）
+    const finalLayout = isAutoLayout 
+      ? getLayoutedElements(tempNodes, edgesRef.current) 
+      : tempNodes;
 
     ydoc.transact(() => {
-      // [改善] 差分更新: 座標が実際に変化したノードだけをコミット対象にする
+      // [B-003] ドラッグ終了時は、全ノードの「現在の画面上の座標」を Yjs に保存する
+      // これにより、手動モードへ移行した際や、選択変更時に位置が戻るのを防ぐ
       finalLayout.forEach(layoutedNode => {
         const yNode = yNodes.get(layoutedNode.id);
         if (yNode) {
-          const prevPos = yNode.position;
-          // 誤差レベル（0.1px以下）の変更は無視して通信量を削減
-          if (Math.abs(prevPos.x - layoutedNode.position.x) > 0.1 || 
-              Math.abs(prevPos.y - layoutedNode.position.y) > 0.1) {
-            yNodes.set(layoutedNode.id, { ...yNode, position: layoutedNode.position });
-          }
+          // 座標を上書きして固定
+          yNodes.set(layoutedNode.id, { 
+            ...yNode, 
+            position: { x: layoutedNode.position.x, y: layoutedNode.position.y } 
+          });
         }
       });
 
@@ -525,7 +548,7 @@ function Flow() {
           yEdges.set(newEdgeId, newEdge);
 
           // 自動レイアウト時の順序ヒント: 兄弟リストの末尾に配置
-          if (isAutoLayout && yNode) {
+          if (isAutoLayout) {
             const siblings = currentEdges
               .filter(e => e.source === targetNode.id && e.target !== node.id)
               .map(e => yNodes.get(e.target))
@@ -563,15 +586,15 @@ function Flow() {
 
           // 自動レイアウトのヒントとしてターゲットノードの座標を参考に設定
           const targetNodeObj = nodesRef.current.find(n => n.id === targetId);
-          if (isAutoLayout && yNode && targetNodeObj) {
+          if (isAutoLayout && targetNodeObj) {
             yNodes.set(node.id, { ...yNode, position: { x: node.position.x, y: targetNodeObj.position.y - 0.5 } });
           }
         } else {
           // 空きスペースへのドロップ時は、座標の保存のみ行われ、自動レイアウトにより順序が更新される
         }
       }
-    }
-  }, origin);
+      }
+    }, 'structural');
   }, [getIntersectingNodes, getIntersectingEdges, isAutoLayout, yNodes, yEdges, yProjectMeta, nodesRef, edgesRef, isStructureMode, clearHighlights]);
 
 
@@ -871,8 +894,12 @@ function Flow() {
   // Yjs側からの変更を監視してReactの状態に反映
   useEffect(() => {
     const syncState = (event) => {
-      // [D-016] structuralオリジンの場合は、自分自身の変更であっても再レイアウトを走らせる
-      if (event && event.transaction.origin === 'local') return;
+      // [修正] 
+      // 1. 自分自身の 'local' トランザクションは通常無視する
+      // 2. ただし、event がない場合（useEffectの再実行による手動同期）は、常に最新を読み込む
+      if (event && event.transaction.local && event.transaction.origin === 'local') {
+        return;
+      }
       
       const nodesArray = Array.from(yNodes.values());
       const edgesArray = Array.from(yEdges.values());
@@ -913,7 +940,11 @@ function Flow() {
           height: 60,
           selected: localNode ? localNode.selected : false, // ローカルの選択状態を優先
           hidden: focusSet ? !focusSet.nodeIds.has(yNode.id) : false,
-          data: { ...yNode.data, isEdgeSourceCandidate: !!yNode.isEdgeSourceCandidate }
+          data: { 
+            ...yNode.data, 
+            isEdgeSourceCandidate: !!yNode.isEdgeSourceCandidate,
+            isPresenterSelected: yNode.id === viewSync.remoteSelectedNodeId
+          }
         };
       });
 
@@ -926,7 +957,12 @@ function Flow() {
         };
       });
 
-      const finalNodes = isAutoLayout && nextNodes.length > 0
+      // [デバッグ] 同期状態のログ出力
+      const isSyncingView = viewSync.isFollowing;
+      // 視点追従中 (isFollowing) は、自身の自動レイアウト設定に関わらず、配信元の座標を優先する
+      const shouldComputeLayout = isAutoLayout && !isSyncingView;
+
+      const finalNodes = (shouldComputeLayout && nextNodes.length > 0)
         ? getLayoutedElements(nextNodes, nextEdges)
         : nextNodes;
 
@@ -946,7 +982,7 @@ function Flow() {
       yEdges.unobserve(syncState);
       yProjectMeta.unobserve(syncState);
     };
-  }, [yNodes, yEdges, yProjectMeta, setNodes, setEdges, isAutoLayout, edgeSourceId, focusMode, selectedNodeId]); // Dependencies updated
+  }, [yNodes, yEdges, yProjectMeta, setNodes, setEdges, isAutoLayout, edgeSourceId, focusMode, selectedNodeId, viewSync.isFollowing, viewSync.remoteSelectedNodeId]); // remoteSelectedNodeId を追加
 
   return (
     <div style={{ width: '100%', height: '100vh', position: 'relative', overflow: 'hidden' }}>
@@ -1015,6 +1051,12 @@ function Flow() {
           border: 3px solid #3b82f6 !important;
           box-shadow: 0 0 15px rgba(59, 130, 246, 0.6) !important;
         }
+        /* プレゼンターの選択（緑枠） */
+        .custom-node.presenter-selected {
+          border: 3px solid #22c55e !important;
+          background-color: #f0fdf4 !important;
+          box-shadow: 0 0 10px rgba(34, 197, 94, 0.5) !important;
+        }
         /* [D-027] ドラッグターゲットのハイライト */
         .drag-target-highlight {
           box-shadow: 0 0 0 4px #3b82f6 !important;
@@ -1028,7 +1070,8 @@ function Flow() {
           box-shadow: 0 0 10px rgba(254, 178, 178, 0.4) !important;
         }
       `}</style>
-      <ReactFlow
+      <div onMouseMove={viewSync.handleMouseMove} style={{ width: '100%', height: '100%' }}>
+        <ReactFlow
         className={isStructureMode ? 'structure-mode-active' : ''} // クラスを動的に付与
         nodes={nodes}
         edges={edges}
@@ -1039,6 +1082,8 @@ function Flow() {
         onNodeDragStart={onNodeDragStart}
         onNodeDrag={onNodeDrag}
         onNodeDragStop={onNodeDragStop}
+        onMove={viewSync.handleMove}
+        onPaneMouseMove={viewSync.handleMouseMove}
         onConnect={onConnect}
         style={{ cursor: isEdgeMode ? 'crosshair' : 'inherit' }}
         nodeTypes={nodeTypes}
@@ -1120,14 +1165,17 @@ function Flow() {
             data-tooltip={isAutoLayout ? "自動レイアウト解除" : "自動レイアウト適用"}
             onClick={() => {
               if (isAutoLayout) {
+                // 自動レイアウトを解除する瞬間に、現在画面に表示されている「計算された座標」を
+                // Yjs の共有データへ一括保存（コミット）する。
+                // 状態更新前の nodesRef.current を参照することで、最新のレイアウト結果を確実に取得。
                 ydoc.transact(() => {
-                  nodes.forEach((node) => {
+                  nodesRef.current.forEach((node) => {
                     const yNode = yNodes.get(node.id);
                     if (yNode) {
                       yNodes.set(node.id, { ...yNode, position: node.position });
                     }
                   });
-                }, 'local');
+                }, 'structural'); // structuralオリジンで保存し、全ユーザーへ確定位置を通知
               }
               setIsAutoLayout(!isAutoLayout);
             }}
@@ -1180,7 +1228,42 @@ function Flow() {
             <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 11V3H8v8H2v10h20V11h-6zm-6-6h4v6h-4V5zm-4 8h4v6H4v-6zm14 6h-4v-6h4v6z"/></svg>
           </button>
         </Panel>
-      </ReactFlow>
+        {/* [B-024] 視点同期ツールバー */}
+        <ViewSyncToolbar sync={viewSync} />
+
+        {/* [B-025] プレゼンターのマウスポインタ (Remote Cursor) */}
+        {!viewSync.isPresenter && viewSync.isFollowing && viewSync.remoteCursor && (() => {
+          // 論理座標を現在のビューポートに基づいたピクセル座標に変換
+          const screenPos = flowToScreenPosition({ x: viewSync.remoteCursor.x, y: viewSync.remoteCursor.y });
+          if (!screenPos) return null;
+          return (
+          <div 
+            style={{
+              position: 'fixed', // absoluteからfixedに変更し、ビューポート基準にする
+              // ブラウザのウィンドウ左上を基準に描画することでズレを解消
+              transform: `translate(${screenPos.x}px, ${screenPos.y}px)`,
+              left: 0,
+              top: 0,
+              width: '12px',
+              height: '12px',
+              backgroundColor: '#22c55e',
+              borderRadius: '50%',
+              pointerEvents: 'none',
+              zIndex: 10000,
+              marginTop: '-6px',
+              marginLeft: '-6px',
+              boxShadow: '0 0 10px rgba(34, 197, 94, 0.8)',
+              border: '2px solid white'
+            }}
+          >
+            <div style={{ position: 'absolute', top: '15px', left: '15px', backgroundColor: '#22c55e', color: 'white', fontSize: '10px', padding: '2px 6px', borderRadius: '4px', whiteSpace: 'nowrap', fontWeight: 'bold' }}>
+              Presenter
+            </div>
+          </div>
+          );
+        })()}
+        </ReactFlow>
+      </div>
     </div>
   );
 }

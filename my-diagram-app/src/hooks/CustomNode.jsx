@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Handle, Position } from 'reactflow';
 
 const CustomNode = ({ id, data, selected }) => {
-  const { isEdgeSourceCandidate } = data;
+  const { isEdgeSourceCandidate, isPresenterSelected } = data;
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState(data.label);
   const inputRef = useRef(null);
@@ -60,7 +60,7 @@ const CustomNode = ({ id, data, selected }) => {
 
   return (
     <div 
-      className={`custom-node ${selected ? 'selected' : ''} ${isEdgeSourceCandidate ? 'edge-source-candidate' : ''}`} // クラスを追加
+      className={`custom-node ${selected ? 'selected' : ''} ${isEdgeSourceCandidate ? 'edge-source-candidate' : ''} ${isPresenterSelected ? 'presenter-selected' : ''}`} // クラスを追加
       tabIndex={0}
       onDoubleClick={handleDoubleClick}
       style={{
