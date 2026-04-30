@@ -1,5 +1,7 @@
 # 依存ライブラリ
 my-diagram-app/node_modules/
+# ビルドツールのキャッシュ
+my-diagram-app/.vite/
 
 # ビルド成果物
 dist/
@@ -19,3 +21,5 @@ Thumbs.db
 
 #zipファイル
 *.zip
+
+
