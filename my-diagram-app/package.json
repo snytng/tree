@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "start:all": "concurrently \"cross-env HOST=0.0.0.0 npx y-websocket\" \"npm run dev\" \"cd mcp-server && node index.js\"",
+    "dev:yjs": "y-websocket",
+    "dev:mcp": "node mcp-server/index.js",
+    "start:all": "concurrently \"npm run dev:yjs\" \"npm run dev\" \"npm run dev:mcp\"",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview"
@@ -27,7 +29,6 @@
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
-    "cross-env": "^10.1.0",
     "eslint": "^10.2.1",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.2",
