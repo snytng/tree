@@ -135,6 +135,16 @@ export const useViewSync = (yProjectMeta, clientID, localSelectedNodeId) => {
     setIsFollowing(prev => !prev);
   }, []);
 
+  const resetViewSync = useCallback(() => {
+    setIsPresenter(false);
+    setIsFollowing(false);
+    setCurrentPresenterId(null);
+    setRemoteCursor(null);
+    setRemoteSelectedNodeId(null);
+    yProjectMeta.delete('viewState');
+    yProjectMeta.delete('cursorState');
+  }, [yProjectMeta]);
+
   return {
     isPresenter,
     isFollowing,
@@ -144,6 +154,7 @@ export const useViewSync = (yProjectMeta, clientID, localSelectedNodeId) => {
     startPresenting,
     stopPresenting,
     toggleFollow,
+    resetViewSync,
     handleMove,
     handleMouseMove
   };

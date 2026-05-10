@@ -8,7 +8,8 @@ const ViewSyncToolbar = ({ sync }) => {
     currentPresenterId,
     startPresenting,
     stopPresenting,
-    toggleFollow
+    toggleFollow,
+    resetViewSync
   } = sync;
 
   // 誰もプレゼンしておらず、自分もプレゼンターでない場合
@@ -51,6 +52,9 @@ const ViewSyncToolbar = ({ sync }) => {
             </button>
           </>
         )}
+        <button onClick={resetViewSync} className="btn-icon" data-tooltip="視点共有をリセット（スタック時に使用）" style={{ marginLeft: '4px', opacity: 0.5 }}>
+          🔄
+        </button>
       </div>
     </Panel>
   );
