@@ -10,6 +10,19 @@
 - **Git**: プロジェクトのクローンに必要
 - **AIアシスタント**: Claude Desktop など、Model Context Protocol (MCP) に対応したAIクライアント
 
+## 1.1 Node.js のインストール
+
+[Node.js 公式サイト](https://nodejs.org/) から LTS 版をダウンロードしてインストールしてください。
+
+インストール後、以下のコマンドでバージョンを確認します。
+
+```bash
+node -v
+npm -v
+```
+
+`v18.x` 以上が表示されれば準備完了です。
+
 ## 2. プロジェクトのセットアップ
 
 ### 2.1 プロジェクトの取得
@@ -23,6 +36,15 @@ cd my-diagram-app
 ```
 
 ### 2.2 依存関係のインストール
+
+社内ネットワーク等でプロキシを使用している場合は、先にnpmにプロキシを設定してください。
+
+```bash
+npm config set proxy http://proxy-server:8080/
+npm config set https-proxy http://proxy-server:8080/
+```
+
+> プロキシが不要な環境ではこの手順はスキップしてください。
 
 プロジェクトのルートディレクトリで、必要な依存関係をインストールします。
 

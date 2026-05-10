@@ -34,7 +34,7 @@ const ydoc = new Y.Doc();
 // 部屋名 'react-flow-demo-room' でWebRTCプロバイダーを設定
 const provider = new WebrtcProvider(ROOM_NAME, ydoc);
 // [D-023] MCP連携用のWebSocketプロバイダーを追加 (ローカルの同期サーバー経由)
-const wsProvider = new WebsocketProvider('ws://localhost:1234', ROOM_NAME, ydoc);
+const wsProvider = new WebsocketProvider(`ws://${window.location.hostname}:1234`, ROOM_NAME, ydoc);
 // ローカルストレージ（IndexedDB）への永続化
 const indexeddb = new IndexeddbPersistence(ROOM_NAME, ydoc);
 
@@ -327,10 +327,9 @@ function Flow() {
   }, []);
 
   // [S-032] 階層構造のペースト (Ctrl+V)
-  const onPasteHierarchy = useCallback(async () => {
+  const onPasteHierarchy = useCallback((text) => {
     try {
-      const text = await navigator.clipboard.readText();
-      if (!text.trim()) return;
+      if (!text || !text.trim()) return;
 
       const { nodes: pastedNodes, edges: pastedEdges } = parseHierarchyText(text);
       if (pastedNodes.length === 0) return;
@@ -374,7 +373,7 @@ function Flow() {
       }, 'structural');
       console.log(`[Clipboard] Pasted ${pastedNodes.length} nodes from clipboard`);
     } catch (err) {
-      console.error('[Clipboard] Failed to read clipboard:', err);
+      console.error('[Clipboard] Failed to paste:', err);
     }
   }, [yNodes, yEdges, isAutoLayout, setNodes, setLastAddedNodeId]);
 
@@ -813,12 +812,6 @@ function Flow() {
         onCopyHierarchy();
       }
 
-      if (e.ctrlKey && e.key === 'v') {
-        if (['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return;
-        e.preventDefault();
-        onPasteHierarchy();
-      }
-
       // Undo: Ctrl+Z
       if (e.ctrlKey && e.key === 'z') {
         e.preventDefault();
@@ -876,8 +869,19 @@ function Flow() {
       }
     };
 
+    const handlePaste = (e) => {
+      if (['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return;
+      e.preventDefault();
+      const text = e.clipboardData.getData('text');
+      onPasteHierarchy(text);
+    };
+
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown); // Cleanup
+    window.addEventListener('paste', handlePaste);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('paste', handlePaste);
+    };
   }, [undoManager, onAddStructuredNode, onDeleteSelected, onCopyHierarchy, onPasteHierarchy, isEdgeMode, edgeSourceId, yNodes, setIsEdgeMode, setEdgeSourceId, setFocusMode]);
 
   // 全てのデータをリセットする関数

@@ -113,8 +113,8 @@ async function main() {
   });
 
   const PORT = 3000;
-  app.listen(PORT, () => {
-    console.error(`MCP HTTP Server running at http://localhost:${PORT}/sse`);
+  app.listen(PORT, '0.0.0.0', () => {
+    console.error(`MCP HTTP Server running at http://0.0.0.0:${PORT}/sse`);
   });
 }
 
