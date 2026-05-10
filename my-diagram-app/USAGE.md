@@ -109,7 +109,7 @@ npx y-websocket
 npm run dev
 ```
 
-*   **URL**: 通常 `http://localhost:5173/`
+*   **URL**: `http://<サーバーのIPアドレス>:5173/`
 *   起動後、ブラウザで上記の URL を開いてください。
 
 #### 3.2.3 ターミナル3: MCPサーバーの起動
@@ -123,7 +123,7 @@ node index.js
 ```
 
 *   **ポート**: 3000
-*   このプロセスは、`http://localhost:3000/sse` で AI クライアントからの接続を待ち受けます。
+*   このプロセスは、すべてのネットワークインターフェース (`http://0.0.0.0:3000/sse`) で接続を待ち受けます。
 
 ## 4. AIアシスタント（Claude Desktopなど）の設定
 
@@ -142,7 +142,7 @@ AIアシスタントが MCP サーバーを認識できるように、設定フ�
 {
   "mcpServers": {
     "diagram-app": {
-      "url": "http://localhost:3000/sse"
+      "url": "http://localhost:3000/sse" 
     }
   }
 }
