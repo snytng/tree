@@ -826,6 +826,9 @@ function Flow() {
 
       // [B-005] Escapeキーでエッジ追加モードを解除
       if (e.key === 'Escape') {
+        // クラス設定メニュー等のサブメニューを閉じる
+        setActiveToolbarMenu(null);
+
         if (isAddNodeMode || isEdgeMode) {
           e.preventDefault();
           setIsAddNodeMode(false);
@@ -844,14 +847,14 @@ function Flow() {
       const text = e.clipboardData.getData('text');
       onPasteHierarchy(text);
     };
-
+    
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('paste', handlePaste);
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('paste', handlePaste);
     };
-  }, [undoManager, onAddStructuredNode, onDeleteSelected, onCopyHierarchy, onPasteHierarchy, isAddNodeMode, setIsAddNodeMode, isEdgeMode, edgeSourceId, yNodes, setIsEdgeMode, setEdgeSourceId, setFocusMode]);
+  }, [undoManager, onAddStructuredNode, onDeleteSelected, onCopyHierarchy, onPasteHierarchy, isAddNodeMode, setIsAddNodeMode, isEdgeMode, edgeSourceId, yNodes, setIsEdgeMode, setEdgeSourceId, setFocusMode, setActiveToolbarMenu]);
 
   // 全てのデータをリセットする関数
   const onReset = useCallback(() => {
@@ -1008,6 +1011,8 @@ function Flow() {
         }
         /* 通常時のノードスタイル */
         .custom-node {
+          position: relative !important;
+          overflow: visible !important;
           box-sizing: border-box;
           border: 1px solid #777;
           background-color: #ffffff;
@@ -1017,6 +1022,21 @@ function Flow() {
         .custom-node.selected {
           border: 2px solid #ff4d4d !important;
           box-shadow: 0 0 10px rgba(255, 77, 77, 0.5) !important;
+        }
+        /* ノードクラス・バッジのスタイル */
+        .node-class-badge {
+          position: absolute !important;
+          top: -12px !important;
+          right: 10px !important;
+          background-color: #3b82f6 !important;
+          color: white !important;
+          font-size: 10px !important;
+          font-weight: bold !important;
+          padding: 2px 6px !important;
+          border-radius: 4px !important;
+          box-shadow: 0 2px 4px rgba(0,0,0,0.2) !important;
+          z-index: 100 !important;
+          white-space: nowrap !important;
         }
         /* エッジ接続元の候補（青枠） */
         .custom-node.edge-source-candidate {
@@ -1054,6 +1074,14 @@ function Flow() {
         div.custom-node[class*="node-class-spec"] { background-color: #e0f2fe !important; border-color: #0ea5e9 !important; }
         div.custom-node[class*="node-class-design"] { background-color: #dcfce7 !important; border-color: #22c55e !important; }
         div.custom-node[class*="node-class-issue"] { background-color: #ffe4e6 !important; border-color: #e11d48 !important; }
+
+        /* [D-043] クラス別バッジカラーのマッピング */
+        div.custom-node[class*="node-class-requirement"] .node-class-badge { background-color: #f59e0b !important; }
+        div.custom-node[class*="node-class-spec"] .node-class-badge { background-color: #0ea5e9 !important; }
+        div.custom-node[class*="node-class-design"] .node-class-badge { background-color: #22c55e !important; }
+        div.custom-node[class*="node-class-issue"] .node-class-badge { background-color: #e11d48 !important; }
+        div.custom-node[class*="node-class-db"] .node-class-badge { background-color: #475569 !important; }
+        div.custom-node[class*="node-class-process"] .node-class-badge { background-color: #6366f1 !important; }
 
         /* 形状マッピング */
         .custom-node.node-class-db { 
@@ -1237,11 +1265,43 @@ function Flow() {
                   <button className="btn-icon" onClick={props.onClick} data-tooltip={props.tooltip} style={{ ...props.style, border: 'none', background: 'transparent', width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'inherit' }}>{props.icon}</button>
                   {activeToolbarMenu === 'class' && (
                     <div className="toolbar-menu-popout">
-                      {['Requirement', 'Spec', 'Design', 'Issue', 'DB', 'Process', ''].map(cls => (
-                        <button key={cls} className={`btn-icon-small ${cls ? `node-class-${cls.toLowerCase()}` : ''}`} onClick={(e) => { e.stopPropagation(); onUpdateNodesClass(cls); }} data-tooltip={cls ? `${cls}クラスを適用` : 'クラスを解除'} style={{ width: '32px', height: '32px', fontSize: '10px', fontWeight: 'bold', border: '1px solid #eee', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#fff' }}>
-                          {cls ? cls[0] : '✕'}
-                        </button>
-                      ))}
+                      {['Requirement', 'Spec', 'Design', 'Issue', 'DB', 'Process', ''].map(cls => {
+                        const classColors = {
+                          Requirement: '#f59e0b',
+                          Spec: '#0ea5e9',
+                          Design: '#22c55e',
+                          Issue: '#e11d48',
+                          DB: '#475569',
+                          Process: '#6366f1',
+                          '': '#ffffff'
+                        };
+                        const color = classColors[cls];
+                        return (
+                          <button 
+                            key={cls} 
+                            className={`btn-icon-small ${cls ? `node-class-${cls.toLowerCase()}` : ''}`} 
+                            onClick={(e) => { e.stopPropagation(); onUpdateNodesClass(cls); }} 
+                            data-tooltip={cls ? `${cls}クラスを適用` : 'クラスを解除'} 
+                            style={{ 
+                              width: '32px', 
+                              height: '32px', 
+                              fontSize: '11px', 
+                              fontWeight: 'bold', 
+                              border: '1px solid #ddd', 
+                              borderRadius: '4px',
+                              cursor: 'pointer', 
+                              display: 'flex', 
+                              alignItems: 'center', 
+                              justifyContent: 'center', 
+                              background: color,
+                              color: cls ? '#fff' : '#666',
+                              transition: 'transform 0.1s'
+                            }}
+                          >
+                            {cls ? cls[0] : '✕'}
+                          </button>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -1310,6 +1370,7 @@ function Flow() {
                     key={item.id}
                     className={`btn-icon ${item.active ? 'active' : ''}`}
                     active={item.active}
+                    tooltip={item.tooltip}
                     data-tooltip={item.tooltip}
                     onClick={item.onClick}
                     disabled={item.disabled}

@@ -64,7 +64,8 @@ const CustomNode = ({ id, data, selected }) => {
       tabIndex={0}
       onDoubleClick={handleDoubleClick}
       style={{
-        position: 'relative', // 追加: バッジの基準点を確実に確保
+        position: 'relative',
+        overflow: 'visible', // バッジのはみ出しを許可
         boxSizing: 'border-box',
         width: '180px',
         height: '60px',
