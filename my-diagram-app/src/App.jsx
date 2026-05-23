@@ -1151,13 +1151,13 @@ function Flow() {
             {
               id: 'addnode',
               tooltip: 'ノードを追加',
-              icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 13h-6v6-2v-6H5v-2h6V5h2v6h6v2z"/></svg>,
+              icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19,3H5C3.9,3 3,3.9 3,5V19C3,20.1 3.9,21 5,21H19C20.1,21 21,20.1 21,19V5C21,3.9 20.1,3 19,3M19,19H5V5H19V19Z"/></svg>,
               onClick: onAddNode
             },
             {
               id: 'edgemode',
               tooltip: !isEdgeMode ? "エッジ追加モード開始" : (edgeSourceId ? "接続先を選択してください" : "接続元を選択してください"),
-              icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 11V3H8v8H2v10h20V11h-6zm-6-6h4v6h-4V5zm-4 8h4v6H4v-6zm14 6h-4v-6h4v6z"/></svg>,
+              icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M13,7V10H5V14H13V17L18,12L13,7Z"/></svg>,
               onClick: () => {
                 setIsEdgeMode(!isEdgeMode);
                 setEdgeSourceId(null);
