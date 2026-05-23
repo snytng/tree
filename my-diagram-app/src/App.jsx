@@ -13,6 +13,7 @@ import ReactFlow, {
   useReactFlow,
   Handle,
   Position,
+  SelectionMode, // 追加
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import * as Y from 'yjs';
@@ -1145,6 +1146,10 @@ function Flow() {
         // [S-028] 常にドラッグ自体は可能にする（自動レイアウト時はShift+ドラッグで構造編集するため）
         nodesDraggable={true} 
         zoomOnDoubleClick={false}
+        // [S-042/D-047] 操作体系の最適化 (Lucidchart 方式)
+        panOnDrag={[1, 2]} 
+        selectionOnDrag={true} 
+        selectionMode={SelectionMode.Partial} 
         fitView
       >
         <Background />
