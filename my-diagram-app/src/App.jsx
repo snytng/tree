@@ -27,6 +27,7 @@ import CustomNode from './hooks/CustomNode';
 import { useFileIO } from './hooks/useFileIO';
 import { getLayoutedElements } from './utils/layoutEngine';
 import { isDescendant, parseHierarchyText, generateHierarchyText } from './utils/graphUtils';
+import ModernToolbar from './components/ModernToolbar';
 
 const ROOM_NAME = 'react-flow-demo-room';
 // Yjsドキュメントの初期化
@@ -1011,25 +1012,6 @@ function Flow() {
           transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
           box-shadow: 0 1px 3px rgba(0,0,0,0.1);
         }
-        .btn-icon::after {
-          content: attr(data-tooltip);
-          position: absolute;
-          right: 50px;
-          background: #333;
-          background: rgba(26, 25, 43, 0.9);
-          backdrop-filter: blur(4px);
-          color: #fff;
-          padding: 4px 8px;
-          border-radius: 4px;
-          font-size: 12px;
-          white-space: nowrap;
-          opacity: 0;
-          pointer-events: none;
-          transition: opacity 0.2s;
-        }
-        .btn-icon:hover::after {
-          opacity: 1;
-        }
         .btn-icon:hover {
           background-color: #f8fafc !important;
           transform: translateY(-2px);
@@ -1146,105 +1128,141 @@ function Flow() {
             )}
           </div>
         </Panel>
+        </ReactFlow>
 
-        <Panel position="top-right" style={{ display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'flex-end' }}>
-          <button className="btn-icon" data-tooltip="デバッグ情報コピー" onClick={onCopyDebugInfo} style={{ backgroundColor: '#fff', border: '2px solid #6366f1', color: '#6366f1', borderRadius: '4px', cursor: 'pointer' }}>
-            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14zM7 10h2v2H7v-2zm0 4h2v2H7v-2zm0-8h2v2H7V6zm4 4h6v2h-6v-2zm0 4h6v2h-6v-2zm0-8h6v2h-6V6z"/></svg>
-          </button>
-          <label className="btn-icon" data-tooltip="プロジェクト・インポート" style={{ backgroundColor: '#fff', border: '2px solid #4caf50', borderRadius: '4px', cursor: 'pointer', color: '#4caf50' }}>
-            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
-            <input type="file" accept=".md" onChange={(e) => importProject(e.target.files[0])} style={{ display: 'none' }} />
-          </label>
-          <button className="btn-icon" data-tooltip="プロジェクト・エクスポート" onClick={exportProject} style={{ backgroundColor: '#fff', border: '2px solid #4caf50', color: '#4caf50', borderRadius: '4px', cursor: 'pointer' }}>
-            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M5 20h14v-2H5v2zM19 11l-7-7-7 7h4v6h6v-6h4z"/></svg>
-          </button>
-          <button className="btn-icon" data-tooltip="元に戻す (Ctrl+Z)" onClick={() => undoManager.undo()} disabled={!canUndo} style={{ backgroundColor: '#fff', border: `2px solid ${canUndo ? '#64748b' : '#e2e8f0'}`, color: canUndo ? '#64748b' : '#e2e8f0', borderRadius: '4px', cursor: canUndo ? 'pointer' : 'not-allowed', opacity: canUndo ? 1 : 0.5 }}>
-            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z"/></svg>
-          </button>
-          <button className="btn-icon" data-tooltip="やり直し (Ctrl+Y)" onClick={() => undoManager.redo()} disabled={!canRedo} style={{ backgroundColor: '#fff', border: `2px solid ${canRedo ? '#64748b' : '#e2e8f0'}`, color: canRedo ? '#64748b' : '#e2e8f0', borderRadius: '4px', cursor: canRedo ? 'pointer' : 'not-allowed', opacity: canRedo ? 1 : 0.5 }}>
-            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.4 10.6C16.55 8.99 14.15 8 11.5 8c-4.65 0-8.58 3.03-9.96 7.22L3.9 16c1.05-3.19 4.05-5.5 7.6-5.5 1.95 0 3.73.72 5.12 1.88L13 16h9V7l-3.6 3.6z"/></svg>
-          </button>
-          <button
-            className="btn-icon"
-            data-tooltip={isAutoLayout ? "自動レイアウト解除" : "自動レイアウト適用"}
-            onClick={() => {
-              if (isAutoLayout) {
-                // 自動レイアウトを解除する瞬間に、現在画面に表示されている「計算された座標」を
-                // Yjs の共有データへ一括保存（コミット）する。
-                // 状態更新前の nodesRef.current を参照することで、最新のレイアウト結果を確実に取得。
+        {/* [D-039] データ駆動型ツールバー構成 - フローティングUIのためReactFlowの外に配置 */}
+        {(() => {
+          const toolbarConfig = [
+            {
+              id: 'undo',
+              tooltip: '元に戻す (Ctrl+Z)',
+              icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z"/></svg>,
+              onClick: () => undoManager.undo(),
+              disabled: !canUndo
+            },
+            {
+              id: 'redo',
+              tooltip: 'やり直し (Ctrl+Y)',
+              icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.4 10.6C16.55 8.99 14.15 8 11.5 8c-4.65 0-8.58 3.03-9.96 7.22L3.9 16c1.05-3.19 4.05-5.5 7.6-5.5 1.95 0 3.73.72 5.12 1.88L13 16h9V7l-3.6 3.6z"/></svg>,
+              onClick: () => undoManager.redo(),
+              disabled: !canRedo
+            },
+            { id: 'sep1', type: 'divider' },
+            {
+              id: 'addnode',
+              tooltip: 'ノードを追加',
+              icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 13h-6v6-2v-6H5v-2h6V5h2v6h6v2z"/></svg>,
+              onClick: onAddNode
+            },
+            {
+              id: 'edgemode',
+              tooltip: !isEdgeMode ? "エッジ追加モード開始" : (edgeSourceId ? "接続先を選択してください" : "接続元を選択してください"),
+              icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 11V3H8v8H2v10h20V11h-6zm-6-6h4v6h-4V5zm-4 8h4v6H4v-6zm14 6h-4v-6h4v6z"/></svg>,
+              onClick: () => {
+                setIsEdgeMode(!isEdgeMode);
+                setEdgeSourceId(null);
                 ydoc.transact(() => {
-                  nodesRef.current.forEach((node) => {
-                    const yNode = yNodes.get(node.id);
-                    if (yNode) {
-                      yNodes.set(node.id, { ...yNode, position: node.position });
-                    }
-                  });
-                }, 'structural'); // structuralオリジンで保存し、全ユーザーへ確定位置を通知
-              }
-              setIsAutoLayout(!isAutoLayout);
-            }}
-            style={{ 
-              backgroundColor: isAutoLayout ? '#1a192b' : '#fff',
-              color: isAutoLayout ? '#fff' : '#1a192b',
-              border: '2px solid #1a192b',
-              borderRadius: '4px',
-              cursor: 'pointer'
-            }}
-          >
-            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M7.5 5.6L10 7L8.6 4.5L10 2L7.5 3.4L5 2L6.4 4.5L5 7L7.5 5.6ZM19.5 15.4L17 14L18.4 16.5L17 19L19.5 17.6L22 19L20.6 16.5L22 14L19.5 15.4ZM22 2L19.5 3.4L17 2L18.4 4.5L17 7L19.5 5.6L22 7L20.6 4.5L22 2ZM14.1 5.9L3 17L7 21L18.1 9.9L14.1 5.9ZM16.6 7.4L14.6 5.4L15.9 4.1L17.9 6.1L16.6 7.4Z"/></svg>
-          </button>
-          <button className="btn-icon" data-tooltip="ノードを追加" onClick={onAddNode} style={{ backgroundColor: '#fff', border: '2px solid #1a192b', borderRadius: '4px', cursor: 'pointer' }}>
-            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 13h-6v6-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
-          </button>
-          <button className="btn-icon" data-tooltip="選択要素を削除" onClick={onDeleteSelected} style={{ backgroundColor: '#fff', border: '2px solid #ff9800', color: '#ff9800', borderRadius: '4px', cursor: 'pointer' }}>
-            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
-          </button>
-          <button className="btn-icon" data-tooltip="全リセット" onClick={onReset} style={{ backgroundColor: '#fff', border: '2px solid #f44336', color: '#f44336', borderRadius: '4px', cursor: 'pointer' }}>
-            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
-          </button>
-          {/* [B-016] フォーカスモードボタン */}
-          <button
-            className="btn-icon"
-            data-tooltip={`フォーカスモード: ${focusMode}`}
-            onClick={() => setFocusMode(prev => {
-              if (prev === 'none') return 'both';
-              if (prev === 'both') return 'upstream';
-              if (prev === 'upstream') return 'downstream';
-              return 'none';
-            })}
-            style={{ backgroundColor: focusMode !== 'none' ? '#8b5cf6' : '#fff', color: focusMode !== 'none' ? '#fff' : '#8b5cf6', border: '2px solid #8b5cf6', borderRadius: '4px', cursor: 'pointer' }}
-          >
-            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 8c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4zm-7 7H3v4c0 1.1.9 2 2 2h4v-2H5v-4zM5 5h4V3H5c-1.1 0-2 .9-2 2v4h2V5zm14-2h-4v2h4v4h2V5c0-1.1-.9-2-2-2zm0 16h-4v2h4c1.1 0 2-.9 2-2v-4h-2v4z"/></svg>
-          </button>
-          {/* [B-005] エッジ追加モードボタン */}
-          <button
-            className="btn-icon"
-            data-tooltip={!isEdgeMode ? "エッジ追加モード開始" : (edgeSourceId ? "接続先を選択してください" : "接続元を選択してください")}
-            onClick={() => {
-              setIsEdgeMode(!isEdgeMode);
-              setEdgeSourceId(null); // モード切り替え時に接続元をリセット
-              ydoc.transact(() => { // 既存の候補状態をクリア
-                yNodes.forEach((n, id) => { if (n.isEdgeSourceCandidate) yNodes.set(id, { ...n, isEdgeSourceCandidate: false }); });
-              }, 'structural');
-            }}
-            style={{ backgroundColor: isEdgeMode ? '#3b82f6' : '#fff', color: isEdgeMode ? '#fff' : '#3b82f6', border: `2px solid ${isEdgeMode ? '#3b82f6' : '#e2e8f0'}`, borderRadius: '4px', cursor: 'pointer' }}
-          >
-            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 11V3H8v8H2v10h20V11h-6zm-6-6h4v6h-4V5zm-4 8h4v6H4v-6zm14 6h-4v-6h4v6z"/></svg>
-          </button>
-        </Panel>
+                  yNodes.forEach((n, id) => { if (n.isEdgeSourceCandidate) yNodes.set(id, { ...n, isEdgeSourceCandidate: false }); });
+                }, 'structural');
+              },
+              active: isEdgeMode,
+              activeColor: '#3b82f6'
+            },
+            {
+              id: 'delete',
+              tooltip: '選択要素を削除',
+              icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>,
+              onClick: onDeleteSelected,
+              style: { color: '#ef4444' }
+            },
+            { id: 'sep2', type: 'divider' },
+            {
+              id: 'reset',
+              tooltip: '全リセット',
+              icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>,
+              onClick: onReset,
+              style: { color: '#ef4444' }
+            },
+            { id: 'sep3', type: 'divider' },
+            {
+              id: 'autolayout',
+              tooltip: isAutoLayout ? "自動レイアウト解除" : "自動レイアウト適用",
+              icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M7.5 5.6L10 7L8.6 4.5L10 2L7.5 3.4L5 2L6.4 4.5L5 7L7.5 5.6ZM19.5 15.4L17 14L18.4 16.5L17 19L19.5 17.6L22 19L20.6 16.5L22 14L19.5 15.4ZM22 2L19.5 3.4L17 2L18.4 4.5L17 7L19.5 5.6L22 7L20.6 4.5L22 2ZM14.1 5.9L3 17L7 21L18.1 9.9L14.1 5.9ZM16.6 7.4L14.6 5.4L15.9 4.1L17.9 6.1L16.6 7.4Z"/></svg>,
+              onClick: () => setIsAutoLayout(!isAutoLayout),
+              active: isAutoLayout,
+              activeColor: '#6366f1'
+            },
+            {
+              id: 'focus',
+              tooltip: `フォーカスモード: ${focusMode}`,
+              icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 8c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4zm-7 7H3v4c0 1.1.9 2 2 2h4v-2H5v-4zM5 5h4V3H5c-1.1 0-2 .9-2 2v4h2V5zm14-2h-4v2h4v4h2V5c0-1.1-.9-2-2-2zm0 16h-4v2h4c1.1 0 2-.9 2-2v-4h-2v4z"/></svg>,
+              onClick: () => setFocusMode(prev => (prev === 'none' ? 'both' : prev === 'both' ? 'upstream' : prev === 'upstream' ? 'downstream' : 'none')),
+              active: focusMode !== 'none',
+              activeColor: '#8b5cf6'
+            },
+            { id: 'sep4', type: 'divider' },
+            {
+              id: 'import',
+              tooltip: 'プロジェクト・インポート',
+              icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>,
+              component: (props) => (
+                <label className="btn-icon" {...props} style={{ cursor: 'pointer' }}>
+                  {props.icon}
+                  <input type="file" accept=".md" onChange={(e) => importProject(e.target.files[0])} style={{ display: 'none' }} />
+                </label>
+              )
+            },
+            {
+              id: 'export',
+              tooltip: 'プロジェクト・エクスポート',
+              icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M5 20h14v-2H5v2zM19 11l-7-7-7 7h4v6h6v-6h4z"/></svg>,
+              onClick: exportProject
+            },
+            { id: 'sep5', type: 'divider' },
+            {
+              id: 'debug',
+              tooltip: 'デバッグ情報コピー',
+              icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14zM7 10h2v2H7v-2zm0 4h2v2H7v-2zm0-8h2v2H7V6zm4 4h6v2h-6v-2zm0 4h6v2h-6v-2zm0-8h6v2h-6V6z"/></svg>,
+              onClick: onCopyDebugInfo
+            }
+          ];
+
+          return (
+            <ModernToolbar>
+              {toolbarConfig.map((item) => {
+                if (item.type === 'divider') {
+                  return <hr key={item.id} className="toolbar-divider" />;
+                }
+                const Component = item.component || 'button';
+                return (
+                  <Component
+                    key={item.id}
+                    className="btn-icon"
+                    data-tooltip={item.tooltip}
+                    onClick={item.onClick}
+                    disabled={item.disabled}
+                    style={{ color: item.active ? item.activeColor : 'inherit', ...item.style }}
+                    icon={item.icon}
+                  >
+                    {item.icon}
+                  </Component>
+                );
+              })}
+            </ModernToolbar>
+          );
+        })()}
+
         {/* [B-024] 視点同期ツールバー */}
         <ViewSyncToolbar sync={viewSync} />
 
-        {/* [B-025] プレゼンターのマウスポインタ (Remote Cursor) */}
+        {/* [B-025] プレゼンターのマウスポインタ (Remote Cursor) - 独立したフローティングUIとして配置 */}
         {!viewSync.isPresenter && viewSync.isFollowing && viewSync.remoteCursor && (() => {
-          // 論理座標を現在のビューポートに基づいたピクセル座標に変換
           const screenPos = flowToScreenPosition({ x: viewSync.remoteCursor.x, y: viewSync.remoteCursor.y });
           if (!screenPos) return null;
           return (
           <div 
             style={{
-              position: 'fixed', // absoluteからfixedに変更し、ビューポート基準にする
-              // ブラウザのウィンドウ左上を基準に描画することでズレを解消
+              position: 'fixed',
               transform: `translate(${screenPos.x}px, ${screenPos.y}px)`,
               left: 0,
               top: 0,
@@ -1266,7 +1284,6 @@ function Flow() {
           </div>
           );
         })()}
-        </ReactFlow>
       </div>
     </div>
   );
