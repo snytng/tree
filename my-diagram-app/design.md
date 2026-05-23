@@ -491,8 +491,32 @@
     2. `ydoc.transact` 内で、各ノードの `data.nodeClass` を更新。
     3. 同時に、ラベル内に古いクラス記法があれば正規表現で削除し、文字列を整形する。
 
-
 ## 46. [D-046] ノードクラスの視覚的表示（バッジ）
 - **概要**: ラベルから分離された属性情報をユーザーが認識できるよう、ノード内に小さなバッジを表示する。
 - **実装**: `CustomNode` の右上に絶対座標で配置。`node-class-xxx` のプレフィックスを除いた短縮名を大文字で表示する。
 *※ AIへの指示方法: 上記リストの並びを入れ替えるか、`- (separator) -` を挿入したい場所に記述して指示してください。*
+
+## 47. [D-047] ラバーバンド描画ロジック
+- **座標の追跡**:
+    - `edgeSourceId` が `null` でない（始点決定済み）とき、`onPaneMouseMove` イベントでマウスのスクリーン座標を取得。
+    - `reactFlowInstance.screenToFlowPosition` を用いて論理座標に変換し、ローカルステート `mousePos: { x, y }` を更新する。
+- **一時的エッジの注入**:
+    - `App.jsx` 内で React Flow に渡す `edges` 配列を生成する際、`edgeSourceId` が存在する場合のみ、末尾に「ラバーバンド用エッジ」を動的に追加する。
+    - **プロパティ構成**:
+        - `id`: `'rubber-band-edge'` (固定値)
+        - `source`: `edgeSourceId`
+        - `target`: `'temp-target'` (実在しないID)
+        - `type`: `'rubberband'` (専用のカスタムエッジタイプ)
+        - `data`: `{ mousePos }`
+        - `animated`: `true`
+- **カスタムエッジ `RubberBandEdge`**:
+    - `getBezierPath`（または `getSimpleBezierPath`）を使用し、`sourceX/Y` から `data.mousePos` までのパスを計算。
+    - マウス位置を終点（Target）として強制的に描画する。
+- **スナッププレビュー**:
+    - マウスが有効な接続先ノード上にある場合、`hoveredNodeId` を更新し、そのノードのハンドルへ吸着した実線に近いプレビューを表示する。
+ - **スタイリング**:
+    - `.rubber-band-edge-path` クラスを定義。
+    - `stroke: #3b82f6` (鮮やかな青), `stroke-dasharray: 5 5` (点線), `opacity: 0.6` を適用。
+    - `pointer-events: none` を設定し、マウス操作を邪魔しないようにする。
+- **クリーンアップ**:
+    - `onNodeClick` による接続完了、`onPaneClick` によるキャンセル、または `Escape` キー押下時に `edgeSourceId` を `null` に戻すことで、ラバーバンドを配列から除去する。

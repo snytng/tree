@@ -26,6 +26,7 @@ import ViewSyncToolbar from './components/ViewSyncToolbar';
 import { useNodeEditor } from './hooks/useNodeEditor';
 import CustomNode from './hooks/CustomNode';
 import { useFileIO } from './hooks/useFileIO';
+import RubberBandEdge from './components/RubberBandEdge';
 import { getLayoutedElements } from './utils/layoutEngine';
 import { isDescendant, parseHierarchyText, generateHierarchyText } from './utils/graphUtils';
 import ModernToolbar from './components/ModernToolbar';
@@ -53,9 +54,11 @@ function Flow() {
   const [isAddNodeMode, setIsAddNodeMode] = useState(false); // [B-028] ノード追加モード
   const [isEdgeMode, setIsEdgeMode] = useState(false); // [B-005] エッジ追加モード
   const [edgeSourceId, setEdgeSourceId] = useState(null); // [B-005] エッジの接続元ノードID
+  const [hoveredNodeId, setHoveredNodeId] = useState(null); // [B-031] マウスオーバー中のノードID
   const [draggingNodeId, setDraggingNodeId] = useState(null); // [D-027] ドラッグ中のノードID
   const [focusMode, setFocusMode] = useState('none'); // [B-016] フォーカスモード
   const [isStructureMode, setIsStructureMode] = useState(false); // [修正] 「構成」モードの状態管理
+  const [mousePos, setMousePos] = useState({ x: 0, y: 0 }); // [B-031] ラバーバンド用マウス座標
   const [activeToolbarMenu, setActiveToolbarMenu] = useState(null); // ツールバーのサブメニュー管理
 
   // [D-027] ハイライト状態を安定させ、チャタリングを防ぐためのRef
@@ -123,13 +126,39 @@ function Flow() {
     default: CustomNode,
   }), []);
 
+  // [B-031] エッジタイプの登録
+  const edgeTypes = useMemo(() => ({
+    rubberband: RubberBandEdge,
+  }), []);
+
   // 最新の状態を常に参照するためのRef (クロージャ問題と連打対策)
   const nodesRef = React.useRef(nodes);
   const edgesRef = React.useRef(edges);
   useEffect(() => { nodesRef.current = nodes; }, [nodes]);
   useEffect(() => { edgesRef.current = edges; }, [edges]);
 
-  const { setCenter, getViewport, fitView, getIntersectingNodes, getIntersectingEdges, flowToScreenPosition } = useReactFlow();
+  const { 
+    setCenter, 
+    getViewport, 
+    fitView, 
+    getIntersectingNodes, 
+    getIntersectingEdges, 
+    flowToScreenPosition,
+    screenToFlowPosition 
+  } = useReactFlow();
+
+  // [B-031] グローバルなマウス移動ハンドラ
+  const handleGlobalMouseMove = useCallback((event) => {
+    viewSync.handleMouseMove(event);
+    if (edgeSourceId) {
+      setMousePos(screenToFlowPosition({ x: event.clientX, y: event.clientY }));
+    }
+  }, [edgeSourceId, screenToFlowPosition, viewSync]);
+
+  // React FlowのPaneイベント用
+  const onPaneMouseMove = useCallback((event) => {
+    handleGlobalMouseMove(event);
+  }, [handleGlobalMouseMove]);
 
   // デフォルトのエッジオプションを定義
   const defaultEdgeOptions = useMemo(() => ({
@@ -281,7 +310,7 @@ function Flow() {
       const currentNodes = nodesRef.current;
       const currentEdges = edgesRef.current;
 
-      // 指定されたターゲットがあればそれを使用、なければ現在の選択または末尾のノード
+      // ターゲットの特定（指定ID > 選択中 > 最後のノード）
       const baseNode = targetId
         ? currentNodes.find((n) => n.id === targetId)
         : currentNodes.find((n) => n.selected) || (currentNodes.length > 0 ? currentNodes[currentNodes.length - 1] : null);
@@ -289,48 +318,82 @@ function Flow() {
       if (!baseNode) return;
 
       const nodeId = `node-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-      const edgeId = `edge-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
-      const yNodes = ydoc.getMap('nodes');
-      const yEdges = ydoc.getMap('edges');
+      let newNode = {
+        id: nodeId,
+        type: 'custom',
+        data: { label: '' },
+        position: { x: baseNode.position.x, y: baseNode.position.y },
+        selected: true,
+        width: 180,
+        height: 60,
+      };
 
-      // 子ノード追加時の配置計算
+      let edgesToAdd = [];
+      let edgesToRemove = [];
+
       if (mode === 'child') {
         const childEdges = currentEdges.filter((e) => e.source === baseNode.id);
         const childNodes = currentNodes.filter((n) => childEdges.some((e) => e.target === n.id));
-        const maxY = childNodes.reduce((max, n) => Math.max(max, n.position?.y || 0), baseNode.position.y - 10);
-
-        const newNode = {
-          id: nodeId,
-          type: 'custom',
-          data: { label: `Child of ${baseNode.data?.label || baseNode.id}` },
-          position: { x: baseNode.position.x + 360, y: maxY + 10 },
-          selected: true,
-          width: 180,
-          height: 60,
-        };
-
-        const newEdge = { id: edgeId, source: baseNode.id, target: nodeId };
-
-        // [B-028] 即座にローカルステートに反映し、選択状態（フォーカス）を当てる
-        const nextNodes = currentNodes.map(n => ({ ...n, selected: false })).concat(newNode);
-        const nextEdges = addEdge(newEdge, currentEdges.map(e => ({ ...e, selected: false })));
-        const finalNodes = isAutoLayout ? getLayoutedElements(nextNodes, nextEdges) : nextNodes;
-
-        setNodes(finalNodes);
-        setEdges(nextEdges);
-        nodesRef.current = finalNodes;
-        edgesRef.current = nextEdges;
-
-        ydoc.transact(() => {
-          yNodes.set(nodeId, { ...newNode, selected: false });
-          yEdges.set(edgeId, newEdge);
-        }, 'structural');
-
-        setLastAddedNodeId(nodeId);
+        const maxY = childNodes.reduce((max, n) => Math.max(max, n.position?.y || 0), baseNode.position.y - 70);
+        
+        newNode.data.label = `Child of ${baseNode.data?.label || 'Node'}`;
+        newNode.position.x += 360;
+        newNode.position.y = maxY + 70;
+        edgesToAdd.push({ id: `edge-c-${Date.now()}`, source: baseNode.id, target: nodeId });
       } 
+      else if (mode === 'sibling' || mode === 'sibling-above') {
+        const parentEdges = currentEdges.filter(e => e.target === baseNode.id);
+        const siblings = currentNodes.filter(n => currentEdges.some(e => parentEdges.some(pe => pe.source === e.source) && e.target === n.id));
+        
+        newNode.data.label = `Sibling of ${baseNode.data?.label || 'Node'}`;
+        if (mode === 'sibling') {
+          const maxY = siblings.reduce((max, n) => Math.max(max, n.position?.y || 0), baseNode.position.y);
+          newNode.position.y = maxY + 70;
+        } else {
+          const minY = siblings.reduce((min, n) => Math.min(min, n.position?.y || 0), baseNode.position.y);
+          newNode.position.y = minY - 70;
+        }
+
+        parentEdges.forEach((pe, idx) => {
+          edgesToAdd.push({ id: `edge-s-${Date.now()}-${idx}`, source: pe.source, target: nodeId });
+        });
+      }
+      else if (mode === 'parent') {
+        newNode.data.label = `Parent of ${baseNode.data?.label || 'Node'}`;
+        newNode.position.x -= 360;
+        
+        const parentEdges = currentEdges.filter(e => e.target === baseNode.id);
+        parentEdges.forEach(pe => {
+          edgesToRemove.push(pe.id);
+          edgesToAdd.push({ ...pe, id: `edge-p-in-${Date.now()}-${pe.id}`, target: nodeId });
+        });
+        
+        edgesToAdd.push({ id: `edge-p-out-${Date.now()}`, source: nodeId, target: baseNode.id });
+      }
+
+      // [B-028] 即座にローカルステートに反映し、UXを向上
+      const nextNodes = currentNodes.map(n => ({ ...n, selected: false })).concat(newNode);
+      let nextEdges = currentEdges.map(e => ({ ...e, selected: false })).filter(e => !edgesToRemove.includes(e.id));
+      edgesToAdd.forEach(edge => { nextEdges = addEdge(edge, nextEdges); });
+
+      const finalNodes = isAutoLayout ? getLayoutedElements(nextNodes, nextEdges) : nextNodes;
+
+      setNodes(finalNodes);
+      setEdges(nextEdges);
+      nodesRef.current = finalNodes;
+      edgesRef.current = nextEdges;
+
+      // Yjs共有ドキュメントへの永続化
+      ydoc.transact(() => {
+        yNodes.set(nodeId, { ...newNode, selected: false });
+        edgesToRemove.forEach(id => yEdges.delete(id));
+        edgesToAdd.forEach(edge => yEdges.set(edge.id, edge));
+      }, 'structural');
+
+      setLastAddedNodeId(nodeId);
     },
-    [yNodes, yEdges, isAutoLayout, setLastAddedNodeId, setNodes, setEdges]
+    [isAutoLayout, setLastAddedNodeId, setNodes, setEdges, yNodes, yEdges]
   );
 
   const onEdgesChange = useCallback(
@@ -410,6 +473,7 @@ function Flow() {
           }
 
           setEdgeSourceId(null);
+          setHoveredNodeId(null); // [B-031] ホバー状態をクリア
           setIsEdgeMode(false);
         }
       }, 'structural');
@@ -430,6 +494,7 @@ function Flow() {
           });
         }, 'structural');
         setEdgeSourceId(null);
+        setHoveredNodeId(null); // [B-031] ホバー状態をクリア
         setIsEdgeMode(false);
       }
     }
@@ -837,6 +902,7 @@ function Flow() {
             yNodes.forEach((n, id) => { if (n.isEdgeSourceCandidate) yNodes.set(id, { ...n, isEdgeSourceCandidate: false }); });
           }, 'structural');
           setEdgeSourceId(null);
+        setHoveredNodeId(null); // [B-031] ホバー状態をクリア
           setIsEdgeMode(false);
         }
       }
@@ -976,12 +1042,58 @@ function Flow() {
     };
   }, [yNodes, yEdges, yProjectMeta, setNodes, setEdges, isAutoLayout, edgeSourceId, focusMode, selectedNodeId, viewSync.isFollowing, viewSync.remoteSelectedNodeId]); // remoteSelectedNodeId を追加
 
+  // [B-031] 表示用エッジの計算 (確定済みのエッジ + ラバーバンド)
+  const displayEdges = useMemo(() => {
+    if (!edgeSourceId) {
+      return edges;
+    }
+
+    // ホバー中のノードがあり、それが接続元ノードと異なる場合
+    if (hoveredNodeId && hoveredNodeId !== edgeSourceId) {
+      return [
+        ...edges,
+        {
+          id: 'temp-connecting-edge',
+          source: edgeSourceId,
+          target: hoveredNodeId,
+          type: 'default', // デフォルトエッジでノードにスナップ
+          animated: true,
+          style: { strokeWidth: 2, stroke: '#3b82f6', strokeDasharray: '5 5' },
+          markerEnd: {
+            type: MarkerType.ArrowClosed,
+            color: '#3b82f6',
+          },
+        },
+      ];
+    } else {
+      // ホバー中のノードがない、または接続元ノード自身にホバーしている場合
+      return [
+        ...edges,
+        {
+          id: 'rubber-band-edge',
+          source: edgeSourceId,
+          target: edgeSourceId, // カスタムエッジをレンダリングさせるためのダミーターゲット
+          type: 'rubberband',
+          data: { mousePos },
+          animated: true,
+        },
+      ];
+    }
+  }, [edges, edgeSourceId, hoveredNodeId, mousePos]);
+
   return (
     <div style={{ width: '100%', height: '100vh', position: 'relative', overflow: 'hidden' }}>
       <style>{`
         .react-flow__edge.selected .react-flow__edge-path {
           stroke: #ff0000 !important;
           stroke-width: 3;
+        }
+        /* [B-031] ラバーバンドエッジのスタイル */
+        .rubber-band-edge-path {
+          stroke: #3b82f6 !important;
+          stroke-dasharray: 5 5;
+          opacity: 0.6;
+          pointer-events: none;
         }
         .react-flow__edge.selected marker path {
           fill: #ff0000 !important;
@@ -1125,11 +1237,11 @@ function Flow() {
           to { transform: translateX(0); opacity: 1; }
         }
       `}</style>
-      <div onMouseMove={viewSync.handleMouseMove} style={{ width: '100%', height: '100%' }}>
+      <div onMouseMove={handleGlobalMouseMove} style={{ width: '100%', height: '100%' }}>
         <ReactFlow
         className={`${isStructureMode ? 'structure-mode-active' : ''} ${isAddNodeMode || isEdgeMode ? 'selectable-mode-active' : ''}`}
         nodes={nodes}
-        edges={edges}
+        edges={displayEdges}
         onNodesChange={onNodesChange}
         onNodeClick={onNodeClick} // [B-005] ノードクリックハンドラを追加
         onPaneClick={onPaneClick} // [B-005] キャンバスクリックハンドラを追加
@@ -1138,10 +1250,13 @@ function Flow() {
         onNodeDrag={onNodeDrag}
         onNodeDragStop={onNodeDragStop}
         onMove={viewSync.handleMove}
-        onPaneMouseMove={viewSync.handleMouseMove}
+        onNodeMouseEnter={useCallback((event, node) => { if (isEdgeMode && edgeSourceId && node.id !== edgeSourceId) setHoveredNodeId(node.id); }, [isEdgeMode, edgeSourceId])}
+        onNodeMouseLeave={useCallback((event, node) => { if (hoveredNodeId === node.id) setHoveredNodeId(null); }, [hoveredNodeId])}
+        onPaneMouseMove={onPaneMouseMove}
         onConnect={onConnect}
         style={{ cursor: (isAddNodeMode || isEdgeMode) ? 'crosshair' : 'inherit' }}
         nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
         defaultEdgeOptions={defaultEdgeOptions}
         // [S-028] 常にドラッグ自体は可能にする（自動レイアウト時はShift+ドラッグで構造編集するため）
         nodesDraggable={true} 
@@ -1231,6 +1346,7 @@ function Flow() {
                 if (nextMode) {
                   setIsEdgeMode(false);
                   setEdgeSourceId(null);
+                  setHoveredNodeId(null);
                   ydoc.transact(() => {
                     yNodes.forEach((n, id) => { if (n.isEdgeSourceCandidate) yNodes.set(id, { ...n, isEdgeSourceCandidate: false }); });
                   }, 'structural');
@@ -1248,6 +1364,7 @@ function Flow() {
                 setIsEdgeMode(nextMode);
                 if (nextMode) setIsAddNodeMode(false);
                 setEdgeSourceId(null);
+                setHoveredNodeId(null);
                 ydoc.transact(() => {
                   yNodes.forEach((n, id) => { if (n.isEdgeSourceCandidate) yNodes.set(id, { ...n, isEdgeSourceCandidate: false }); });
                 }, 'structural');
