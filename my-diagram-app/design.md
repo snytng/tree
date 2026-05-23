@@ -416,6 +416,28 @@
 - **干渉防止**:
     - ツールバー内での操作がキャンバスに伝播しないよう `e.stopPropagation()` を徹底。
 
+## 40. [D-040] ノード追加モードの制御
+- **状態管理**: `isAddNodeMode` ステートを導入。
+- **インタラクション**:
+    - `onNodeClick`: `isAddNodeMode` が真の場合、クリックされた ID を `parentId` として `onAddStructuredNode('child', nodeId)` を実行。
+    - `onPaneClick`: `isAddNodeMode` が真の場合、従来の `onAddNode` ロジック（最大Y座標+10）を実行。
+- **解除ロジック**: `Escape` キー押下時、`isAddNodeMode` と `isEdgeMode` を false にし、`yNodes` の `isEdgeSourceCandidate` フラグを全消去する。
+- **即時選択**: `onAddStructuredNode` 内で `setNodes` を直接呼び出し、Yjs の同期を待たずにローカルの `selected` 状態を更新する。
+- **反転表示**: `active` 属性を持つボタンに対し、CSS で背景色と文字色（白）を適用する。
+- **選択候補のホバー CSS**: `ReactFlow` に `selectable-mode-active` クラスを付与し、その子要素である `.custom-node:hover` に対して淡い青系のスタイルを適用する。確定状態（`.selected`, `.edge-source-candidate`）がある場合はそちらを優先する。
+
+## 41. [D-041] ノードの視覚的状態と優先順位 (Node Visual Priority)
+- **概要**: 複数の状態が重なった際の、枠線や背景色の適用優先順位を定義する。
+- **優先順位 (高 → 低)**:
+    1. **ドラッグターゲット (`.drag-target-highlight`)**: 青色の太い枠線。構造変更の確定地点を示す。
+    2. **モード中ホバー (`.selectable-mode-active :hover`)**: 薄水色の背景。クリック可能な候補であることを示す。
+    3. **エッジ接続元 (`.edge-source-candidate`)**: 青色の枠線とグロー。
+    4. **プレゼンター選択 (`.presenter-selected`)**: 緑色の枠線と背景。
+    5. **ローカル選択 (`.selected`)**: 赤色の枠線。
+    6. **デフォルト**: 通常の境界線。
+- **設計意図**: 
+    - ホバー（操作の意思）は、既存の選択状態（赤）よりも優先して表示することで、ユーザーに「今クリックしたら何が起きるか」を正しく伝える。
+    - ただし、エッジの「接続元」として既に確定している青枠は、ホバーで消すと混乱を招く可能性があるため、ホバー背景は適用しつつ枠線は維持する等の調整を行う。
 ## 39. [D-039] データ駆動型ツールバー構成
 - **概要**: ツールバー内のボタン順序や定義を `App.jsx` 内の単一の配列 (`toolbarConfig`) で管理する。
 - **メリット**:
