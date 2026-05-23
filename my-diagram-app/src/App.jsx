@@ -27,6 +27,7 @@ import CustomNode from './hooks/CustomNode';
 import { useFileIO } from './hooks/useFileIO';
 import { getLayoutedElements } from './utils/layoutEngine';
 import { isDescendant, parseHierarchyText, generateHierarchyText } from './utils/graphUtils';
+import ModernToolbar from './components/ModernToolbar';
 
 const ROOM_NAME = 'react-flow-demo-room';
 // Yjsドキュメントの初期化
@@ -48,6 +49,7 @@ function Flow() {
   const [projectName, setProjectName] = useState('New Project');
   const [isEditingProjectName, setIsEditingProjectName] = useState(false);
   const [lastAddedNodeId, setLastAddedNodeId] = useState(null);
+  const [isAddNodeMode, setIsAddNodeMode] = useState(false); // [B-028] ノード追加モード
   const [isEdgeMode, setIsEdgeMode] = useState(false); // [B-005] エッジ追加モード
   const [edgeSourceId, setEdgeSourceId] = useState(null); // [B-005] エッジの接続元ノードID
   const [draggingNodeId, setDraggingNodeId] = useState(null); // [D-027] ドラッグ中のノードID
@@ -194,6 +196,106 @@ function Flow() {
     [onNodesChangeState, yNodes, isAutoLayout] // setNodesを除去
   );
 
+  // ノードを追加する関数（一番下に追加）
+  const onAddNode = useCallback(() => {
+    // フォーカス競合を防ぐため、現在の入力要素やノードからフォーカスを外す
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+
+    const id = `node-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    console.log(`[Action] Adding normal node at bottom: ${id}`);
+
+    // [D-004] 現在のノードの中で最大の Y 座標を取得して、そのさらに下に配置する
+    const maxY = nodesRef.current.reduce((max, n) => Math.max(max, n.position.y), 0);
+    
+    const label = `Node ${yNodes.size + 1}`;
+    const newNode = {
+      id,
+      type: 'custom',
+      data: { label },
+      position: { x: 0, y: maxY + 10 }, 
+      selected: true,
+      width: 180,
+      height: 60,
+    };
+
+    const nextNodes = nodesRef.current.map(n => ({ ...n, selected: false })).concat(newNode);
+    const nextEdges = edgesRef.current.map(e => ({ ...e, selected: false }));
+    const finalNodes = isAutoLayout ? getLayoutedElements(nextNodes, nextEdges) : nextNodes;
+
+    setNodes(finalNodes);
+    setEdges(nextEdges);
+    nodesRef.current = finalNodes;
+    edgesRef.current = nextEdges;
+
+    ydoc.transact(() => {
+      yNodes.set(id, { ...newNode, selected: false });
+    }, 'structural');
+
+    setLastAddedNodeId(id);
+  }, [yNodes, yEdges, setLastAddedNodeId, isAutoLayout, setNodes, setEdges]);
+
+  // [B-028] 構造的なノード追加（targetId指定に対応）
+  const onAddStructuredNode = useCallback(
+    (mode, targetId = null) => {
+      if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+
+      const currentNodes = nodesRef.current;
+      const currentEdges = edgesRef.current;
+
+      // 指定されたターゲットがあればそれを使用、なければ現在の選択または末尾のノード
+      const baseNode = targetId
+        ? currentNodes.find((n) => n.id === targetId)
+        : currentNodes.find((n) => n.selected) || (currentNodes.length > 0 ? currentNodes[currentNodes.length - 1] : null);
+
+      if (!baseNode) return;
+
+      const nodeId = `node-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      const edgeId = `edge-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+      const yNodes = ydoc.getMap('nodes');
+      const yEdges = ydoc.getMap('edges');
+
+      // 子ノード追加時の配置計算
+      if (mode === 'child') {
+        const childEdges = currentEdges.filter((e) => e.source === baseNode.id);
+        const childNodes = currentNodes.filter((n) => childEdges.some((e) => e.target === n.id));
+        const maxY = childNodes.reduce((max, n) => Math.max(max, n.position?.y || 0), baseNode.position.y - 10);
+
+        const newNode = {
+          id: nodeId,
+          type: 'custom',
+          data: { label: `Child of ${baseNode.data?.label || baseNode.id}` },
+          position: { x: baseNode.position.x + 360, y: maxY + 10 },
+          selected: true,
+          width: 180,
+          height: 60,
+        };
+
+        const newEdge = { id: edgeId, source: baseNode.id, target: nodeId };
+
+        // [B-028] 即座にローカルステートに反映し、選択状態（フォーカス）を当てる
+        const nextNodes = currentNodes.map(n => ({ ...n, selected: false })).concat(newNode);
+        const nextEdges = addEdge(newEdge, currentEdges.map(e => ({ ...e, selected: false })));
+        const finalNodes = isAutoLayout ? getLayoutedElements(nextNodes, nextEdges) : nextNodes;
+
+        setNodes(finalNodes);
+        setEdges(nextEdges);
+        nodesRef.current = finalNodes;
+        edgesRef.current = nextEdges;
+
+        ydoc.transact(() => {
+          yNodes.set(nodeId, { ...newNode, selected: false });
+          yEdges.set(edgeId, newEdge);
+        }, 'structural');
+
+        setLastAddedNodeId(nodeId);
+      } 
+    },
+    [yNodes, yEdges, isAutoLayout, setLastAddedNodeId, setNodes, setEdges]
+  );
+
   const onEdgesChange = useCallback(
     (changes) => {
       onEdgesChangeState(changes);
@@ -235,7 +337,11 @@ function Flow() {
 
   // [B-005] ノードクリック時のハンドラ
   const onNodeClick = useCallback((event, node) => {
-    if (isEdgeMode) {
+    if (isAddNodeMode) {
+      // [B-028] ノード追加モード時：クリックしたノードの子として追加
+      onAddStructuredNode('child', node.id);
+      setIsAddNodeMode(false);
+    } else if (isEdgeMode) {
       event.preventDefault(); // React Flowのデフォルト選択動作を抑制
       event.stopPropagation(); // onPaneClickが発火するのを防ぐ
 
@@ -270,27 +376,27 @@ function Flow() {
           setIsEdgeMode(false);
         }
       }, 'structural');
-    } else {
-      // 通常のノード選択はonNodesChangeで処理されるため、ここでは何もしない
-      // 必要であれば、ここで通常の選択ロジックを実装することも可能
     }
-  }, [isEdgeMode, edgeSourceId, yNodes, onConnect]);
+  }, [isAddNodeMode, onAddStructuredNode, setIsAddNodeMode, isEdgeMode, edgeSourceId, yNodes, onConnect]);
 
   // [B-005] キャンバス（背景）クリック時のハンドラ
   const onPaneClick = useCallback(() => {
-    if (isEdgeMode && (edgeSourceId || isEdgeMode)) { // edgeSourceIdがあるか、モードがONなら
-      ydoc.transact(() => {
-        // 接続元候補のみをクリア（セレクションは各ユーザーのローカルで管理）
-        yNodes.forEach((n, id) => {
-          if (n.isEdgeSourceCandidate) {
-            yNodes.set(id, { ...n, isEdgeSourceCandidate: false });
-          }
-        });
-      }, 'structural');
-      setEdgeSourceId(null);
-      setIsEdgeMode(false); // モードも解除
+    if (isAddNodeMode) {
+      // [B-028] ノード追加モード時：背景クリックで一番下に追加
+      onAddNode();
+      setIsAddNodeMode(false);
+    } else if (isEdgeMode) {
+      if (edgeSourceId || isEdgeMode) {
+        ydoc.transact(() => {
+          yNodes.forEach((n, id) => {
+            if (n.isEdgeSourceCandidate) yNodes.set(id, { ...n, isEdgeSourceCandidate: false });
+          });
+        }, 'structural');
+        setEdgeSourceId(null);
+        setIsEdgeMode(false);
+      }
     }
-  }, [isEdgeMode, edgeSourceId, yNodes]);
+  }, [isAddNodeMode, onAddNode, setIsAddNodeMode, isEdgeMode, edgeSourceId, yNodes]);
 
   // ノードが追加された際に中央へ移動するエフェクト
   useEffect(() => {
@@ -597,48 +703,6 @@ function Flow() {
   }, [getIntersectingNodes, getIntersectingEdges, isAutoLayout, yNodes, yEdges, yProjectMeta, nodesRef, edgesRef, isStructureMode, clearHighlights]);
 
 
-  // ノードを追加する関数
-  const onAddNode = useCallback(() => {
-    // フォーカス競合を防ぐため、現在の入力要素やノードからフォーカスを外す
-    if (document.activeElement instanceof HTMLElement) {
-      document.activeElement.blur();
-    }
-
-    const id = `node-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-    console.log(`[Action] Adding normal node: ${id}`);
-
-    // [D-004] 現在のノードの中で最大の Y 座標を取得して、そのさらに下に配置する
-    const maxY = nodesRef.current.reduce((max, n) => Math.max(max, n.position.y), 0);
-    
-    const label = `Node ${yNodes.size + 1}`;
-    const newNode = {
-      id,
-      type: 'custom',
-      data: { label },
-      position: { x: 0, y: maxY + 10 }, 
-      selected: true,
-      width: 180,
-      height: 60,
-    };
-
-    // 即座にローカルステートに反映（syncStateがlocal originを無視するため必要）
-    const nextNodes = nodesRef.current.map(n => ({ ...n, selected: false })).concat(newNode);
-    const nextEdges = edgesRef.current.map(e => ({ ...e, selected: false }));
-    const finalNodes = isAutoLayout ? getLayoutedElements(nextNodes, nextEdges) : nextNodes;
-
-    setNodes(finalNodes);
-    setEdges(nextEdges);
-    nodesRef.current = finalNodes;
-    edgesRef.current = nextEdges;
-
-    ydoc.transact(() => {
-      // 共有データ上は selected: false として保存し、ローカルでのみ選択状態(true)を維持する
-      yNodes.set(id, { ...newNode, selected: false });
-    }, 'structural');
-
-    setLastAddedNodeId(id);
-  }, [yNodes, yEdges, setLastAddedNodeId, isAutoLayout, setNodes, setEdges]);
-
   // レイアウトデバッグ情報をクリップボードにコピーする関数
   const onCopyDebugInfo = useCallback(() => {
     const debugInfo = {
@@ -651,151 +715,6 @@ function Flow() {
     navigator.clipboard.writeText(text);
     alert('レイアウト情報をクリップボードにコピーしました。Geminiに共有してください。');
   }, [isAutoLayout, projectName]);
-
-  const onAddStructuredNode = useCallback((mode) => {
-    // フォーカス競合を防ぐ
-    if (document.activeElement instanceof HTMLElement) {
-      document.activeElement.blur();
-    }
-
-    // Refから最新の状態を取得し、連打時も正確なベースノードを特定する
-    const currentNodes = nodesRef.current;
-    const currentEdges = edgesRef.current;
-
-    const selectedNode = currentNodes.find(n => n.selected) || (currentNodes.length > 0 ? currentNodes[currentNodes.length - 1] : null);
-    if (!selectedNode) return;
-
-    console.log(`[Action] Adding ${mode} node. Base node:`, selectedNode.id);
-
-    const nodeId = `node-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-    const edgeId = `edge-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-    
-    const yNodes = ydoc.getMap('nodes');
-    const yEdges = ydoc.getMap('edges');
-    const sharedNodes = Array.from(yNodes.values());
-    const sharedEdges = Array.from(yEdges.values());
-
-    if (mode === 'parent') {
-      const incomingEdges = sharedEdges.filter(e => e.target === selectedNode.id);
-      const newNode = {
-        id: nodeId,
-        type: 'custom',
-        data: { label: 'Parent Node' },
-        position: { x: selectedNode.position.x - 360, y: selectedNode.position.y },
-        selected: true,
-        width: 180,
-        height: 60,
-      };
-
-      const edgesToAdd = [];
-      if (incomingEdges.length > 0) {
-        incomingEdges.forEach((edge, idx) => {
-          edgesToAdd.push({ id: `${edgeId}-p-${idx}`, source: edge.source, target: nodeId });
-          edgesToAdd.push({ id: `${edgeId}-c-${idx}`, source: nodeId, target: selectedNode.id });
-        });
-      } else {
-        edgesToAdd.push({ id: edgeId, source: nodeId, target: selectedNode.id });
-      }
-
-      const nextNodes = currentNodes.map(n => ({ ...n, selected: false })).concat(newNode);
-      const nextEdges = currentEdges
-        .filter(e => !incomingEdges.some(ie => ie.id === e.id))
-        .map(e => ({ ...e, selected: false }))
-        .concat(edgesToAdd);
-
-      const finalNodes = isAutoLayout ? getLayoutedElements(nextNodes, nextEdges) : nextNodes;
-      setNodes(finalNodes);
-      setEdges(nextEdges);
-      nodesRef.current = finalNodes;
-      edgesRef.current = nextEdges;
-
-      ydoc.transact(() => {
-        yNodes.set(nodeId, { ...newNode, selected: false }); // 共有データ上は selected を持たない
-        edgesToAdd.forEach(e => yEdges.set(e.id, e));
-        incomingEdges.forEach(e => yEdges.delete(e.id));
-      }, 'structural');
-
-      setLastAddedNodeId(nodeId);
-      return;
-    }
-
-    let parentId = null;
-    if (mode === 'sibling' || mode === 'sibling-above') {
-      const incomingEdge = sharedEdges.find(e => e.target === selectedNode.id);
-      parentId = incomingEdge ? incomingEdge.source : null;
-    } else {
-      parentId = selectedNode.id;
-    }
-
-    // [D-004] 挿入位置の計算: 兄弟リストを取得して論理的な中間座標を決定する
-    let siblings = [];
-    if (parentId) {
-      const siblingIds = sharedEdges.filter(e => e.source === parentId).map(e => e.target);
-      siblings = sharedNodes.filter(n => siblingIds.includes(n.id));
-    } else {
-      const targetIds = new Set(sharedEdges.map(e => e.target));
-      siblings = sharedNodes.filter(n => !targetIds.has(n.id));
-    }
-
-    siblings.sort((a, b) => (a.position?.y || 0) - (b.position?.y || 0));
-    const currentIndex = siblings.findIndex(n => n.id === selectedNode.id);
-    const currentSharedY = yNodes.get(selectedNode.id)?.position?.y || 0;
-    
-    let targetY;
-    if (mode === 'child') {
-      // 子ノード追加時は末尾に追加
-      const childIds = sharedEdges.filter(e => e.source === selectedNode.id).map(e => e.target);
-      const children = sharedNodes.filter(n => childIds.includes(n.id));
-      const maxChildY = children.reduce((max, n) => Math.max(max, n.position?.y || 0), 0);
-      targetY = maxChildY + 10;
-    } else if (mode === 'sibling-above') {
-      // 兄弟ノード（上）追加時
-      if (currentIndex > 0) {
-        const prevY = siblings[currentIndex - 1].position?.y || 0;
-        targetY = (prevY + currentSharedY) / 2;
-      } else {
-        targetY = currentSharedY - 10;
-      }
-    } else {
-      // 兄弟ノード追加時: 選択ノードの「次」があればその中間、なければ +10
-      if (currentIndex !== -1 && currentIndex < siblings.length - 1) {
-        const nextY = siblings[currentIndex + 1].position?.y || 0;
-        targetY = (currentSharedY + nextY) / 2;
-      } else {
-        targetY = currentSharedY + 10;
-      }
-    }
-
-    const newNode = {
-      id: nodeId,
-      type: 'custom',
-      data: { label: `${mode === 'child' ? 'Child' : 'Sibling'} Node` },
-      position: { x: selectedNode.position.x + 360, y: targetY },
-      selected: true,
-      width: 180,
-      height: 60,
-    };
-    const newEdge = parentId ? { id: edgeId, source: parentId, target: nodeId } : null;
-
-    // 即座にローカルステートに反映
-    const nextNodes = currentNodes.map(n => ({ ...n, selected: false })).concat(newNode);
-    const nextEdges = newEdge 
-      ? addEdge(newEdge, currentEdges.map(e => ({ ...e, selected: false })))
-      : currentEdges.map(e => ({ ...e, selected: false }));
-
-    const finalNodes = isAutoLayout ? getLayoutedElements(nextNodes, nextEdges) : nextNodes;
-    setNodes(finalNodes);
-    setEdges(nextEdges);
-    nodesRef.current = finalNodes;
-    edgesRef.current = nextEdges;
-
-    ydoc.transact(() => {
-      yNodes.set(nodeId, { ...newNode, selected: false });
-      if (newEdge) yEdges.set(edgeId, newEdge);
-    }, 'structural');
-
-    setLastAddedNodeId(nodeId);
-  }, [yNodes, yEdges, setLastAddedNodeId, isAutoLayout, setNodes, setEdges]);
 
   // キーボードショートカットの制御
   useEffect(() => {
@@ -858,8 +777,9 @@ function Flow() {
 
       // [B-005] Escapeキーでエッジ追加モードを解除
       if (e.key === 'Escape') {
-        if (isEdgeMode) {
+        if (isAddNodeMode || isEdgeMode) {
           e.preventDefault();
+          setIsAddNodeMode(false);
           ydoc.transact(() => {
             yNodes.forEach((n, id) => { if (n.isEdgeSourceCandidate) yNodes.set(id, { ...n, isEdgeSourceCandidate: false }); });
           }, 'structural');
@@ -882,7 +802,7 @@ function Flow() {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('paste', handlePaste);
     };
-  }, [undoManager, onAddStructuredNode, onDeleteSelected, onCopyHierarchy, onPasteHierarchy, isEdgeMode, edgeSourceId, yNodes, setIsEdgeMode, setEdgeSourceId, setFocusMode]);
+  }, [undoManager, onAddStructuredNode, onDeleteSelected, onCopyHierarchy, onPasteHierarchy, isAddNodeMode, setIsAddNodeMode, isEdgeMode, edgeSourceId, yNodes, setIsEdgeMode, setEdgeSourceId, setFocusMode]);
 
   // 全てのデータをリセットする関数
   const onReset = useCallback(() => {
@@ -1011,29 +931,16 @@ function Flow() {
           transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
           box-shadow: 0 1px 3px rgba(0,0,0,0.1);
         }
-        .btn-icon::after {
-          content: attr(data-tooltip);
-          position: absolute;
-          right: 50px;
-          background: #333;
-          background: rgba(26, 25, 43, 0.9);
-          backdrop-filter: blur(4px);
-          color: #fff;
-          padding: 4px 8px;
-          border-radius: 4px;
-          font-size: 12px;
-          white-space: nowrap;
-          opacity: 0;
-          pointer-events: none;
-          transition: opacity 0.2s;
-        }
-        .btn-icon:hover::after {
-          opacity: 1;
-        }
         .btn-icon:hover {
           background-color: #f8fafc !important;
           transform: translateY(-2px);
           box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+        /* [B-028] アクティブなボタンの反転表示 */
+        .btn-icon.active {
+          background-color: var(--active-bg) !important;
+          color: #ffffff !important;
+          box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
         }
         .btn-icon svg {
           width: 20px;
@@ -1061,6 +968,12 @@ function Flow() {
           background-color: #f0fdf4 !important;
           box-shadow: 0 0 10px rgba(34, 197, 94, 0.5) !important;
         }
+        /* [B-028] モード中のホバー強調（選択候補） */
+        .selectable-mode-active .custom-node:hover:not(.edge-source-candidate) {
+          background-color: #f0f9ff !important;
+          border: 2px solid #0ea5e9 !important;
+          box-shadow: 0 0 12px rgba(14, 165, 233, 0.4) !important;
+        }
         /* [D-027] ドラッグターゲットのハイライト */
         .drag-target-highlight {
           box-shadow: 0 0 0 4px #3b82f6 !important;
@@ -1076,7 +989,7 @@ function Flow() {
       `}</style>
       <div onMouseMove={viewSync.handleMouseMove} style={{ width: '100%', height: '100%' }}>
         <ReactFlow
-        className={isStructureMode ? 'structure-mode-active' : ''} // クラスを動的に付与
+        className={`${isStructureMode ? 'structure-mode-active' : ''} ${isAddNodeMode || isEdgeMode ? 'selectable-mode-active' : ''}`}
         nodes={nodes}
         edges={edges}
         onNodesChange={onNodesChange}
@@ -1089,7 +1002,7 @@ function Flow() {
         onMove={viewSync.handleMove}
         onPaneMouseMove={viewSync.handleMouseMove}
         onConnect={onConnect}
-        style={{ cursor: isEdgeMode ? 'crosshair' : 'inherit' }}
+        style={{ cursor: (isAddNodeMode || isEdgeMode) ? 'crosshair' : 'inherit' }}
         nodeTypes={nodeTypes}
         defaultEdgeOptions={defaultEdgeOptions}
         // [S-028] 常にドラッグ自体は可能にする（自動レイアウト時はShift+ドラッグで構造編集するため）
@@ -1146,105 +1059,158 @@ function Flow() {
             )}
           </div>
         </Panel>
+        </ReactFlow>
 
-        <Panel position="top-right" style={{ display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'flex-end' }}>
-          <button className="btn-icon" data-tooltip="デバッグ情報コピー" onClick={onCopyDebugInfo} style={{ backgroundColor: '#fff', border: '2px solid #6366f1', color: '#6366f1', borderRadius: '4px', cursor: 'pointer' }}>
-            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14zM7 10h2v2H7v-2zm0 4h2v2H7v-2zm0-8h2v2H7V6zm4 4h6v2h-6v-2zm0 4h6v2h-6v-2zm0-8h6v2h-6V6z"/></svg>
-          </button>
-          <label className="btn-icon" data-tooltip="プロジェクト・インポート" style={{ backgroundColor: '#fff', border: '2px solid #4caf50', borderRadius: '4px', cursor: 'pointer', color: '#4caf50' }}>
-            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
-            <input type="file" accept=".md" onChange={(e) => importProject(e.target.files[0])} style={{ display: 'none' }} />
-          </label>
-          <button className="btn-icon" data-tooltip="プロジェクト・エクスポート" onClick={exportProject} style={{ backgroundColor: '#fff', border: '2px solid #4caf50', color: '#4caf50', borderRadius: '4px', cursor: 'pointer' }}>
-            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M5 20h14v-2H5v2zM19 11l-7-7-7 7h4v6h6v-6h4z"/></svg>
-          </button>
-          <button className="btn-icon" data-tooltip="元に戻す (Ctrl+Z)" onClick={() => undoManager.undo()} disabled={!canUndo} style={{ backgroundColor: '#fff', border: `2px solid ${canUndo ? '#64748b' : '#e2e8f0'}`, color: canUndo ? '#64748b' : '#e2e8f0', borderRadius: '4px', cursor: canUndo ? 'pointer' : 'not-allowed', opacity: canUndo ? 1 : 0.5 }}>
-            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z"/></svg>
-          </button>
-          <button className="btn-icon" data-tooltip="やり直し (Ctrl+Y)" onClick={() => undoManager.redo()} disabled={!canRedo} style={{ backgroundColor: '#fff', border: `2px solid ${canRedo ? '#64748b' : '#e2e8f0'}`, color: canRedo ? '#64748b' : '#e2e8f0', borderRadius: '4px', cursor: canRedo ? 'pointer' : 'not-allowed', opacity: canRedo ? 1 : 0.5 }}>
-            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.4 10.6C16.55 8.99 14.15 8 11.5 8c-4.65 0-8.58 3.03-9.96 7.22L3.9 16c1.05-3.19 4.05-5.5 7.6-5.5 1.95 0 3.73.72 5.12 1.88L13 16h9V7l-3.6 3.6z"/></svg>
-          </button>
-          <button
-            className="btn-icon"
-            data-tooltip={isAutoLayout ? "自動レイアウト解除" : "自動レイアウト適用"}
-            onClick={() => {
-              if (isAutoLayout) {
-                // 自動レイアウトを解除する瞬間に、現在画面に表示されている「計算された座標」を
-                // Yjs の共有データへ一括保存（コミット）する。
-                // 状態更新前の nodesRef.current を参照することで、最新のレイアウト結果を確実に取得。
+        {/* [D-039] データ駆動型ツールバー構成 - フローティングUIのためReactFlowの外に配置 */}
+        {(() => {
+          const toolbarConfig = [
+            {
+              id: 'undo',
+              tooltip: '元に戻す (Ctrl+Z)',
+              icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z"/></svg>,
+              onClick: () => undoManager.undo(),
+              disabled: !canUndo
+            },
+            {
+              id: 'redo',
+              tooltip: 'やり直し (Ctrl+Y)',
+              icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.4 10.6C16.55 8.99 14.15 8 11.5 8c-4.65 0-8.58 3.03-9.96 7.22L3.9 16c1.05-3.19 4.05-5.5 7.6-5.5 1.95 0 3.73.72 5.12 1.88L13 16h9V7l-3.6 3.6z"/></svg>,
+              onClick: () => undoManager.redo(),
+              disabled: !canRedo
+            },
+            { id: 'sep1', type: 'divider' },
+            {
+              id: 'addnode',
+              tooltip: isAddNodeMode ? '追加先を選択（背景なら一番下、ノードなら子）' : 'ノード追加モード開始',
+              icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19,3H5C3.9,3 3,3.9 3,5V19C3,20.1 3.9,21 5,21H19C20.1,21 21,20.1 21,19V5C21,3.9 20.1,3 19,3M19,19H5V5H19V19Z"/></svg>,
+              onClick: () => {
+                const nextMode = !isAddNodeMode;
+                setIsAddNodeMode(nextMode);
+                if (nextMode) {
+                  setIsEdgeMode(false);
+                  setEdgeSourceId(null);
+                  ydoc.transact(() => {
+                    yNodes.forEach((n, id) => { if (n.isEdgeSourceCandidate) yNodes.set(id, { ...n, isEdgeSourceCandidate: false }); });
+                  }, 'structural');
+                }
+              },
+              active: isAddNodeMode,
+              activeColor: '#10b981'
+            },
+            {
+              id: 'edgemode',
+              tooltip: !isEdgeMode ? "エッジ追加モード開始" : (edgeSourceId ? "接続先を選択してください" : "接続元を選択してください"),
+              icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M13,7V10H5V14H13V17L18,12L13,7Z"/></svg>,
+              onClick: () => {
+                const nextMode = !isEdgeMode;
+                setIsEdgeMode(nextMode);
+                if (nextMode) setIsAddNodeMode(false);
+                setEdgeSourceId(null);
                 ydoc.transact(() => {
-                  nodesRef.current.forEach((node) => {
-                    const yNode = yNodes.get(node.id);
-                    if (yNode) {
-                      yNodes.set(node.id, { ...yNode, position: node.position });
-                    }
-                  });
-                }, 'structural'); // structuralオリジンで保存し、全ユーザーへ確定位置を通知
-              }
-              setIsAutoLayout(!isAutoLayout);
-            }}
-            style={{ 
-              backgroundColor: isAutoLayout ? '#1a192b' : '#fff',
-              color: isAutoLayout ? '#fff' : '#1a192b',
-              border: '2px solid #1a192b',
-              borderRadius: '4px',
-              cursor: 'pointer'
-            }}
-          >
-            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M7.5 5.6L10 7L8.6 4.5L10 2L7.5 3.4L5 2L6.4 4.5L5 7L7.5 5.6ZM19.5 15.4L17 14L18.4 16.5L17 19L19.5 17.6L22 19L20.6 16.5L22 14L19.5 15.4ZM22 2L19.5 3.4L17 2L18.4 4.5L17 7L19.5 5.6L22 7L20.6 4.5L22 2ZM14.1 5.9L3 17L7 21L18.1 9.9L14.1 5.9ZM16.6 7.4L14.6 5.4L15.9 4.1L17.9 6.1L16.6 7.4Z"/></svg>
-          </button>
-          <button className="btn-icon" data-tooltip="ノードを追加" onClick={onAddNode} style={{ backgroundColor: '#fff', border: '2px solid #1a192b', borderRadius: '4px', cursor: 'pointer' }}>
-            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 13h-6v6-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
-          </button>
-          <button className="btn-icon" data-tooltip="選択要素を削除" onClick={onDeleteSelected} style={{ backgroundColor: '#fff', border: '2px solid #ff9800', color: '#ff9800', borderRadius: '4px', cursor: 'pointer' }}>
-            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
-          </button>
-          <button className="btn-icon" data-tooltip="全リセット" onClick={onReset} style={{ backgroundColor: '#fff', border: '2px solid #f44336', color: '#f44336', borderRadius: '4px', cursor: 'pointer' }}>
-            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
-          </button>
-          {/* [B-016] フォーカスモードボタン */}
-          <button
-            className="btn-icon"
-            data-tooltip={`フォーカスモード: ${focusMode}`}
-            onClick={() => setFocusMode(prev => {
-              if (prev === 'none') return 'both';
-              if (prev === 'both') return 'upstream';
-              if (prev === 'upstream') return 'downstream';
-              return 'none';
-            })}
-            style={{ backgroundColor: focusMode !== 'none' ? '#8b5cf6' : '#fff', color: focusMode !== 'none' ? '#fff' : '#8b5cf6', border: '2px solid #8b5cf6', borderRadius: '4px', cursor: 'pointer' }}
-          >
-            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 8c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4zm-7 7H3v4c0 1.1.9 2 2 2h4v-2H5v-4zM5 5h4V3H5c-1.1 0-2 .9-2 2v4h2V5zm14-2h-4v2h4v4h2V5c0-1.1-.9-2-2-2zm0 16h-4v2h4c1.1 0 2-.9 2-2v-4h-2v4z"/></svg>
-          </button>
-          {/* [B-005] エッジ追加モードボタン */}
-          <button
-            className="btn-icon"
-            data-tooltip={!isEdgeMode ? "エッジ追加モード開始" : (edgeSourceId ? "接続先を選択してください" : "接続元を選択してください")}
-            onClick={() => {
-              setIsEdgeMode(!isEdgeMode);
-              setEdgeSourceId(null); // モード切り替え時に接続元をリセット
-              ydoc.transact(() => { // 既存の候補状態をクリア
-                yNodes.forEach((n, id) => { if (n.isEdgeSourceCandidate) yNodes.set(id, { ...n, isEdgeSourceCandidate: false }); });
-              }, 'structural');
-            }}
-            style={{ backgroundColor: isEdgeMode ? '#3b82f6' : '#fff', color: isEdgeMode ? '#fff' : '#3b82f6', border: `2px solid ${isEdgeMode ? '#3b82f6' : '#e2e8f0'}`, borderRadius: '4px', cursor: 'pointer' }}
-          >
-            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 11V3H8v8H2v10h20V11h-6zm-6-6h4v6h-4V5zm-4 8h4v6H4v-6zm14 6h-4v-6h4v6z"/></svg>
-          </button>
-        </Panel>
+                  yNodes.forEach((n, id) => { if (n.isEdgeSourceCandidate) yNodes.set(id, { ...n, isEdgeSourceCandidate: false }); });
+                }, 'structural');
+              },
+              active: isEdgeMode,
+              activeColor: '#3b82f6'
+            },
+            {
+              id: 'delete',
+              tooltip: '選択要素を削除',
+              icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>,
+              onClick: onDeleteSelected,
+              style: { color: '#ef4444' }
+            },
+            { id: 'sep2', type: 'divider' },
+            {
+              id: 'reset',
+              tooltip: '全リセット',
+              icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>,
+              onClick: onReset,
+              style: { color: '#ef4444' }
+            },
+            { id: 'sep3', type: 'divider' },
+            {
+              id: 'autolayout',
+              tooltip: isAutoLayout ? "自動レイアウト解除" : "自動レイアウト適用",
+              icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M7.5 5.6L10 7L8.6 4.5L10 2L7.5 3.4L5 2L6.4 4.5L5 7L7.5 5.6ZM19.5 15.4L17 14L18.4 16.5L17 19L19.5 17.6L22 19L20.6 16.5L22 14L19.5 15.4ZM22 2L19.5 3.4L17 2L18.4 4.5L17 7L19.5 5.6L22 7L20.6 4.5L22 2ZM14.1 5.9L3 17L7 21L18.1 9.9L14.1 5.9ZM16.6 7.4L14.6 5.4L15.9 4.1L17.9 6.1L16.6 7.4Z"/></svg>,
+              onClick: () => setIsAutoLayout(!isAutoLayout),
+              active: isAutoLayout,
+              activeColor: '#6366f1'
+            },
+            {
+              id: 'focus',
+              tooltip: `フォーカスモード: ${focusMode}`,
+              icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 8c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4zm-7 7H3v4c0 1.1.9 2 2 2h4v-2H5v-4zM5 5h4V3H5c-1.1 0-2 .9-2 2v4h2V5zm14-2h-4v2h4v4h2V5c0-1.1-.9-2-2-2zm0 16h-4v2h4c1.1 0 2-.9 2-2v-4h-2v4z"/></svg>,
+              onClick: () => setFocusMode(prev => (prev === 'none' ? 'both' : prev === 'both' ? 'upstream' : prev === 'upstream' ? 'downstream' : 'none')),
+              active: focusMode !== 'none',
+              activeColor: '#8b5cf6'
+            },
+            { id: 'sep4', type: 'divider' },
+            {
+              id: 'import',
+              tooltip: 'プロジェクト・インポート',
+              icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>,
+              component: (props) => (
+                <label className="btn-icon" {...props} style={{ cursor: 'pointer' }}>
+                  {props.icon}
+                  <input type="file" accept=".md" onChange={(e) => importProject(e.target.files[0])} style={{ display: 'none' }} />
+                </label>
+              )
+            },
+            {
+              id: 'export',
+              tooltip: 'プロジェクト・エクスポート',
+              icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M5 20h14v-2H5v2zM19 11l-7-7-7 7h4v6h6v-6h4z"/></svg>,
+              onClick: exportProject
+            },
+            { id: 'sep5', type: 'divider' },
+            {
+              id: 'debug',
+              tooltip: 'デバッグ情報コピー',
+              icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14zM7 10h2v2H7v-2zm0 4h2v2H7v-2zm0-8h2v2H7V6zm4 4h6v2h-6v-2zm0 4h6v2h-6v-2zm0-8h6v2h-6V6z"/></svg>,
+              onClick: onCopyDebugInfo
+            }
+          ];
+
+          return (
+            <ModernToolbar>
+              {toolbarConfig.map((item) => {
+                if (item.type === 'divider') {
+                  return <hr key={item.id} className="toolbar-divider" />;
+                }
+                const Component = item.component || 'button';
+                return (
+                  <Component
+                    key={item.id}
+                    className={`btn-icon ${item.active ? 'active' : ''}`}
+                    data-tooltip={item.tooltip}
+                    onClick={item.onClick}
+                    disabled={item.disabled}
+                    style={{ 
+                      '--active-bg': item.activeColor || '#3b82f6',
+                      ...item.style 
+                    }}
+                    icon={item.icon}
+                  >
+                    {item.icon}
+                  </Component>
+                );
+              })}
+            </ModernToolbar>
+          );
+        })()}
+
         {/* [B-024] 視点同期ツールバー */}
         <ViewSyncToolbar sync={viewSync} />
 
-        {/* [B-025] プレゼンターのマウスポインタ (Remote Cursor) */}
+        {/* [B-025] プレゼンターのマウスポインタ (Remote Cursor) - 独立したフローティングUIとして配置 */}
         {!viewSync.isPresenter && viewSync.isFollowing && viewSync.remoteCursor && (() => {
-          // 論理座標を現在のビューポートに基づいたピクセル座標に変換
           const screenPos = flowToScreenPosition({ x: viewSync.remoteCursor.x, y: viewSync.remoteCursor.y });
           if (!screenPos) return null;
           return (
           <div 
             style={{
-              position: 'fixed', // absoluteからfixedに変更し、ビューポート基準にする
-              // ブラウザのウィンドウ左上を基準に描画することでズレを解消
+              position: 'fixed',
               transform: `translate(${screenPos.x}px, ${screenPos.y}px)`,
               left: 0,
               top: 0,
@@ -1266,7 +1232,6 @@ function Flow() {
           </div>
           );
         })()}
-        </ReactFlow>
       </div>
     </div>
   );

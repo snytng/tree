@@ -395,3 +395,93 @@
     - [ ] プレゼンターがマウスを動かした際、フォロワーの画面に追従して赤い点などのカーソルが表示されること。
     - [ ] プレゼンが停止された際、フォロワーの画面からカーソルが消えること。
     - [ ] キャンバスをズームしても、カーソルが指し示しているノードの位置がズレないこと。
+
+## 38. [D-038] モダン・ツールバーの実装詳細
+- **コンポーネント構造**: 
+    - `ModernToolbar.jsx` を新規作成。React Flow の `Panel` は使わず、独立した `div` として実装し、`z-index` で最前面に配置。
+- **スタイリング**:
+    - `display: flex`, `flex-direction: column`, `gap: 0` を適用。
+    - 背景色、シャドウ、わずかな角丸を設定し、浮遊感を演出。
+    - ボタン間の境界線が重ならないよう、`margin-top: -1px` 等で調整。
+- **ドラッグロジック**:
+    - `PointerEvents` を使用。`onPointerDown` でキャプチャを開始し、`onPointerMove` で位置を更新。
+    - `localStorage.getItem('toolbar-pos')` で位置を永続化。
+- **折りたたみロジック**:
+    - `isCollapsed` ステートにより、`toolbar-content` の `max-height` または `display` を切り替え。
+    - CSS 遷移 (`transition`) を使用。
+- **ツールチップの再実装 ([D-011] の統合)**:
+    - ボタン要素に `data-tooltip` 属性を付与。
+    - `ModernToolbar.css` にて `[data-tooltip]::after` を定義。
+    - ツールバーが画面端にある場合でもツールチップが欠けないよう、表示位置を「左側」または動的に調整する。
+- **干渉防止**:
+    - ツールバー内での操作がキャンバスに伝播しないよう `e.stopPropagation()` を徹底。
+
+## 40. [D-040] ノード追加モードの制御
+- **状態管理**: `isAddNodeMode` ステートを導入。
+- **インタラクション**:
+    - `onNodeClick`: `isAddNodeMode` が真の場合、クリックされた ID を `parentId` として `onAddStructuredNode('child', nodeId)` を実行。
+    - `onPaneClick`: `isAddNodeMode` が真の場合、従来の `onAddNode` ロジック（最大Y座標+10）を実行。
+- **解除ロジック**: `Escape` キー押下時、`isAddNodeMode` と `isEdgeMode` を false にし、`yNodes` の `isEdgeSourceCandidate` フラグを全消去する。
+- **即時選択**: `onAddStructuredNode` 内で `setNodes` を直接呼び出し、Yjs の同期を待たずにローカルの `selected` 状態を更新する。
+- **反転表示**: `active` 属性を持つボタンに対し、CSS で背景色と文字色（白）を適用する。
+- **選択候補のホバー CSS**: `ReactFlow` に `selectable-mode-active` クラスを付与し、その子要素である `.custom-node:hover` に対して淡い青系のスタイルを適用する。確定状態（`.selected`, `.edge-source-candidate`）がある場合はそちらを優先する。
+
+## 41. [D-041] ノードの視覚的状態と優先順位 (Node Visual Priority)
+- **概要**: 複数の状態が重なった際の、枠線や背景色の適用優先順位を定義する。
+- **優先順位 (高 → 低)**:
+    1. **ドラッグターゲット (`.drag-target-highlight`)**: 青色の太い枠線。構造変更の確定地点を示す。
+    2. **モード中ホバー (`.selectable-mode-active :hover`)**: 薄水色の背景。クリック可能な候補であることを示す。
+    3. **エッジ接続元 (`.edge-source-candidate`)**: 青色の枠線とグロー。
+    4. **プレゼンター選択 (`.presenter-selected`)**: 緑色の枠線と背景。
+    5. **ローカル選択 (`.selected`)**: 赤色の枠線。
+    6. **デフォルト**: 通常の境界線。
+- **設計意図**: 
+    - ホバー（操作の意思）は、既存の選択状態（赤）よりも優先して表示することで、ユーザーに「今クリックしたら何が起きるか」を正しく伝える。
+    - ただし、エッジの「接続元」として既に確定している青枠は、ホバーで消すと混乱を招く可能性があるため、ホバー背景は適用しつつ枠線は維持する等の調整を行う。
+## 39. [D-039] データ駆動型ツールバー構成
+- **概要**: ツールバー内のボタン順序や定義を `App.jsx` 内の単一の配列 (`toolbarConfig`) で管理する。
+- **メリット**:
+    - 順序の入れ替えが配列の要素移動だけで完結する。
+    - アイコン、ツールチップ、アクション、活性状態のロジックを一箇所で集中管理できる。
+    - ユーザーや AI が「〜のアイコンを一番上に持ってくる」といった指示を出しやすくなる。
+- **ツールバー構成マスターリスト (順序管理用)**:
+    - **アイコン定義 (SVG Path)**:
+        - `addnode`: `M19,3H5C3.9,3 3,3.9 3,5V19C3,20.1 3.9,21 5,21H19C20.1,21 21,20.1 21,19V5C21,3.9 20.1,3 19,3M19,19H5V5H19V19Z` (Outline Square)
+        - `edgemode`: `M13,7V10H5V14H13V17L18,12L13,7Z` (Arrow Line)
+
+    1. `undo`: 元に戻す
+    2. `redo`: やり直し
+    - (separator) -
+    3. `addnode`: ノードを追加
+    4. `edgemode`: エッジ追加モード
+    5. `delete`: 選択要素を削除
+    - (separator) -
+    6. `reset`: 全リセット
+    - (separator) -
+    7. `autolayout`: 自動レイアウト適用/解除
+    8. `focus`: フォーカスモード
+    - (separator) -
+    9. `import`: プロジェクト・インポート
+    10. `export`: プロジェクト・エクスポート
+    - (separator) -
+    11. `debug`: デバッグ情報コピー
+
+## 42. [D-042] モード排他・共存マトリクス (Mode Relationship Matrix)
+- **概要**: ツールバーの各トグルモード間の相互作用を定義し、予期しない状態の競合を防止する。
+- **定義マトリクス**:
+
+| モード名 (ID) | 影響を与えるモード | 関係性 | 振る舞い |
+| :--- | :--- | :--- | :--- |
+| `addnode` | `edgemode` | **排他** | `addnode` をONにする際、`edgemode` をOFFにし、`edgeSourceId` をクリアする。 |
+| `edgemode` | `addnode` | **排他** | `edgemode` をONにする際、`addnode` をOFFにする。 |
+| `autolayout` | (全て) | **共存** | 他のどのモードの状態も変更せず、自身のON/OFFのみを切り替える。 |
+| `focus` | (全て) | **共存** | 他のどのモードの状態も変更せず、自身の状態遷移 (`none` -> `both` -> ...) のみを実行する。 |
+
+- **共通解除ルール**: 
+    - `Escape` キー押下時は、現在有効なすべての「排他モード（`addnode`, `edgemode`）」を解除する。
+    - 破壊的操作（`reset`, `import`）の実行前後は、安全のためトグルモードをすべて解除することを推奨。
+
+- **実装への反映ガイド**: 
+    - `App.jsx` の `toolbarConfig` 内の `onClick` ハンドラは、本マトリクスに従って副作用（他のステートのセッター呼び出し）を記述すること。
+
+*※ AIへの指示方法: 上記リストの並びを入れ替えるか、`- (separator) -` を挿入したい場所に記述して指示してください。*
