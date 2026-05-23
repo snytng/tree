@@ -58,25 +58,42 @@ const CustomNode = ({ id, data, selected }) => {
     }
   };
 
+  // [D-043] バッジを表示する対象のクラスを限定（NODEやCHILDなどは除外）
+  const semanticClasses = [
+    'node-class-requirement',
+    'node-class-spec',
+    'node-class-design',
+    'node-class-issue',
+    'node-class-db',
+    'node-class-process'
+  ];
+  const showBadge = data.nodeClass && semanticClasses.includes(data.nodeClass.toLowerCase());
+
   return (
     <div 
-      className={`custom-node ${selected ? 'selected' : ''} ${isEdgeSourceCandidate ? 'edge-source-candidate' : ''} ${isPresenterSelected ? 'presenter-selected' : ''}`} // クラスを追加
+      className={`custom-node ${selected ? 'selected' : ''} ${isEdgeSourceCandidate ? 'edge-source-candidate' : ''} ${isPresenterSelected ? 'presenter-selected' : ''} ${data.nodeClass || ''}`} // クラスを追加
       tabIndex={0}
       onDoubleClick={handleDoubleClick}
       style={{
+        position: 'relative',
+        overflow: 'visible', // バッジのはみ出しを許可
         boxSizing: 'border-box',
         width: '180px',
         height: '60px',
         padding: '10px',
         borderRadius: '5px',
-        background: '#fff',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
       }}
     >
       <Handle type="target" position={Position.Left} />
-      <div style={{ width: '100%', textAlign: 'center' }}>
+      {showBadge && (
+        <div className="node-class-badge">
+          {data.nodeClass.replace('node-class-', '').toUpperCase()}
+        </div>
+      )}
+      <div className="node-label-container" style={{ width: '100%', textAlign: 'center', pointerEvents: 'none', position: 'relative' }}>
         {isEditing ? (
           <input
             ref={inputRef}
