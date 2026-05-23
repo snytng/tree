@@ -60,23 +60,28 @@ const CustomNode = ({ id, data, selected }) => {
 
   return (
     <div 
-      className={`custom-node ${selected ? 'selected' : ''} ${isEdgeSourceCandidate ? 'edge-source-candidate' : ''} ${isPresenterSelected ? 'presenter-selected' : ''}`} // クラスを追加
+      className={`custom-node ${selected ? 'selected' : ''} ${isEdgeSourceCandidate ? 'edge-source-candidate' : ''} ${isPresenterSelected ? 'presenter-selected' : ''} ${data.nodeClass || ''}`} // クラスを追加
       tabIndex={0}
       onDoubleClick={handleDoubleClick}
       style={{
+        position: 'relative', // 追加: バッジの基準点を確実に確保
         boxSizing: 'border-box',
         width: '180px',
         height: '60px',
         padding: '10px',
         borderRadius: '5px',
-        background: '#fff',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
       }}
     >
       <Handle type="target" position={Position.Left} />
-      <div style={{ width: '100%', textAlign: 'center' }}>
+      {data.nodeClass && data.nodeClass !== '' && (
+        <div className="node-class-badge">
+          {data.nodeClass.replace('node-class-', '').toUpperCase()}
+        </div>
+      )}
+      <div className="node-label-container" style={{ width: '100%', textAlign: 'center', pointerEvents: 'none', position: 'relative' }}>
         {isEditing ? (
           <input
             ref={inputRef}

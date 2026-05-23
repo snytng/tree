@@ -55,6 +55,7 @@ function Flow() {
   const [draggingNodeId, setDraggingNodeId] = useState(null); // [D-027] ドラッグ中のノードID
   const [focusMode, setFocusMode] = useState('none'); // [B-016] フォーカスモード
   const [isStructureMode, setIsStructureMode] = useState(false); // [修正] 「構成」モードの状態管理
+  const [activeToolbarMenu, setActiveToolbarMenu] = useState(null); // ツールバーのサブメニュー管理
 
   // [D-027] ハイライト状態を安定させ、チャタリングを防ぐためのRef
   const lastTargetIdRef = React.useRef(null);
@@ -235,6 +236,41 @@ function Flow() {
 
     setLastAddedNodeId(id);
   }, [yNodes, yEdges, setLastAddedNodeId, isAutoLayout, setNodes, setEdges]);
+
+  // [B-029] ノードのクラスを一括更新する関数
+  const onUpdateNodesClass = useCallback((className) => {
+    const selectedNodes = nodesRef.current.filter(n => n.selected);
+    if (selectedNodes.length === 0) return;
+
+    // IDを保持しつつクラス名を除去するためのパターン
+    const idPrefixRegex = /^(\[[A-Z0-9]+-\d+\]\s*)/i;
+    const classPatternRegex = /^(?:\[[^\]]+\]|[^:：\s]+[:：])\s*/i;
+
+    ydoc.transact(() => {
+      selectedNodes.forEach(node => {
+        const yNode = yNodes.get(node.id);
+        if (!yNode) return;
+
+        // ラベルから既存のクラス記法をクリーンアップ（IDは残す）
+        const originalLabel = yNode.data.label || '';
+        const idMatch = originalLabel.match(idPrefixRegex);
+        const idPart = idMatch ? idMatch[1] : '';
+        const labelWithoutId = originalLabel.substring(idPart.length);
+        const cleanLabel = idPart + labelWithoutId.replace(classPatternRegex, '').trim();
+
+        yNodes.set(node.id, {
+          ...yNode,
+          data: {
+            ...yNode.data,
+            nodeClass: className ? `node-class-${className.toLowerCase()}` : '',
+            label: cleanLabel
+          }
+        });
+      });
+    }, 'structural');
+    
+    setActiveToolbarMenu(null); // メニューを閉じる
+  }, [yNodes]);
 
   // [B-028] 構造的なノード追加（targetId指定に対応）
   const onAddStructuredNode = useCallback(
@@ -705,15 +741,28 @@ function Flow() {
 
   // レイアウトデバッグ情報をクリップボードにコピーする関数
   const onCopyDebugInfo = useCallback(() => {
+    const selectedNodes = nodesRef.current.filter(n => n.selected);
+    const isFiltering = selectedNodes.length > 0;
+    const nodesToExport = isFiltering ? selectedNodes : nodesRef.current;
+    const exportedNodeIds = new Set(nodesToExport.map(n => n.id));
+
     const debugInfo = {
       isAutoLayout,
       projectName,
-      nodes: nodesRef.current.map(n => ({ id: n.id, x: Math.round(n.position.x), y: Math.round(n.position.y) })),
-      edges: edgesRef.current.map(e => ({ source: e.source, target: e.target }))
+      nodes: nodesToExport.map(n => ({ 
+        id: n.id, 
+        label: n.data?.label,
+        nodeClass: n.data?.nodeClass,
+        x: Math.round(n.position.x), 
+        y: Math.round(n.position.y) 
+      })),
+      edges: edgesRef.current
+        .filter(e => exportedNodeIds.has(e.source) && exportedNodeIds.has(e.target))
+        .map(e => ({ source: e.source, target: e.target }))
     };
     const text = JSON.stringify(debugInfo, null, 2);
     navigator.clipboard.writeText(text);
-    alert('レイアウト情報をクリップボードにコピーしました。Geminiに共有してください。');
+    alert(isFiltering ? '選択中の要素のデバッグ情報をコピーしました。' : '全要素のデバッグ情報をコピーしました。');
   }, [isAutoLayout, projectName]);
 
   // キーボードショートカットの制御
@@ -818,12 +867,10 @@ function Flow() {
   // Yjs側からの変更を監視してReactの状態に反映
   useEffect(() => {
     const syncState = (event) => {
-      // [修正] 
-      // 1. 自分自身の 'local' トランザクションは通常無視する
-      // 2. ただし、event がない場合（useEffectの再実行による手動同期）は、常に最新を読み込む
-      if (event && event.transaction.local && event.transaction.origin === 'local') {
-        return;
-      }
+      // [修正] 以前は local origin を無視していましたが、ラベル編集による nodeClass の
+      // 再計算を自分自身の画面でも即座に反映させるため、常に同期を実行します。
+      // React Flow の setNodes はデータに変更がない限り再レンダリングを抑制するため、
+      // ここでの early return は不要です。
       
       const nodesArray = Array.from(yNodes.values());
       const edgesArray = Array.from(yEdges.values());
@@ -857,6 +904,18 @@ function Flow() {
       })();
 
       const nextNodes = nodesArray.map((yNode) => {
+        // [B-007/017] ラベルからクラス名を動的に解析 (再読み込み時の再現性を向上)
+        const label = (yNode.data?.label || '').trim();
+        const classRegex = /^(?:\[[A-Z0-9]+-\d+\]\s*)?(?:\[([^\]]+)\]|([^:：\s]+)[:：\s])/i;
+        const match = label.match(classRegex);
+
+        // [D-044] 属性優先ロジック: 
+        // UIから設定された nodeClass (属性) があればそれを最優先し、なければラベルから解析する
+        const attrClass = yNode.data?.nodeClass;
+        const nodeClass = (attrClass && attrClass !== '') 
+          ? attrClass 
+          : (match ? `node-class-${(match[1] || match[2]).toLowerCase().trim()}` : '');
+
         const localNode = nodesRef.current.find(n => n.id === yNode.id);
         return {
           ...yNode,
@@ -866,6 +925,7 @@ function Flow() {
           hidden: focusSet ? !focusSet.nodeIds.has(yNode.id) : false,
           data: { 
             ...yNode.data, 
+            nodeClass, // 解析済みクラス名を付与
             isEdgeSourceCandidate: !!yNode.isEdgeSourceCandidate,
             isPresenterSelected: yNode.id === viewSync.remoteSelectedNodeId
           }
@@ -950,6 +1010,7 @@ function Flow() {
         .custom-node {
           box-sizing: border-box;
           border: 1px solid #777;
+          background-color: #ffffff;
           transition: border-color 0.2s, box-shadow 0.2s;
         }
         /* 選択時の強調（赤枠） */
@@ -985,6 +1046,50 @@ function Flow() {
           background: #fffafa !important;
           border: 2px solid #feb2b2 !important;
           box-shadow: 0 0 10px rgba(254, 178, 178, 0.4) !important;
+        }
+
+        /* [D-043] ノードクラス別カラーマッピング (背景色を少し濃くして視認性を向上) */
+        /* 強力な詳細度を確保するため、属性セレクタとクラスを組み合わせる */
+        div.custom-node[class*="node-class-requirement"] { background-color: #fef3c7 !important; border-color: #f59e0b !important; }
+        div.custom-node[class*="node-class-spec"] { background-color: #e0f2fe !important; border-color: #0ea5e9 !important; }
+        div.custom-node[class*="node-class-design"] { background-color: #dcfce7 !important; border-color: #22c55e !important; }
+        div.custom-node[class*="node-class-issue"] { background-color: #ffe4e6 !important; border-color: #e11d48 !important; }
+
+        /* 形状マッピング */
+        .custom-node.node-class-db { 
+          border-style: double !important; 
+          border-width: 4px !important; 
+        }
+        .custom-node.node-class-process { 
+          border-radius: 20px !important; 
+        }
+        
+        /* ホバー時の挙動（クラス付きノードでも優先順位を維持） */
+        .selectable-mode-active .custom-node[class*="node-class-"]:hover {
+          background-color: #f0f9ff !important;
+          border: 2px solid #0ea5e9 !important;
+          border-style: solid !important; /* DBなどの特殊形状もホバー時は一時的に戻す */
+        }
+
+        /* クラスセレクター・メニューのスタイル */
+        .toolbar-menu-popout {
+          position: absolute;
+          right: 50px;
+          top: 0;
+          background: #ffffff;
+          border: 1px solid #d1d5db;
+          border-radius: 6px;
+          display: flex;
+          flex-direction: row;
+          padding: 4px;
+          gap: 4px;
+          box-shadow: -4px 0 15px rgba(0,0,0,0.1);
+          z-index: 1002;
+          animation: slideIn 0.2s ease-out;
+        }
+        @keyframes slideIn {
+          from { transform: translateX(10px); opacity: 0; }
+          to { transform: translateX(0); opacity: 1; }
         }
       `}</style>
       <div onMouseMove={viewSync.handleMouseMove} style={{ width: '100%', height: '100%' }}>
@@ -1122,6 +1227,27 @@ function Flow() {
             },
             { id: 'sep2', type: 'divider' },
             {
+              id: 'class-selector',
+              tooltip: '属性（クラス）を一括設定',
+              icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l-5.5 9h11L12 2zm0 3.84L13.93 9h-3.86L12 5.84zM17.5 13c-2.49 0-4.5 2.01-4.5 4.5s2.01 4.5 4.5 4.5 4.5-2.01 4.5-4.5-2.01-4.5-4.5-4.5zm0 7c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5zM3 21.5h8v-8H3v8zm2-6h4v4H5v-4z"/></svg>,
+              onClick: () => setActiveToolbarMenu(activeToolbarMenu === 'class' ? null : 'class'),
+              active: activeToolbarMenu === 'class',
+              component: (props) => (
+                <div className={props.className} style={{ position: 'relative' }}>
+                  <button className="btn-icon" onClick={props.onClick} data-tooltip={props.tooltip} style={{ ...props.style, border: 'none', background: 'transparent', width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'inherit' }}>{props.icon}</button>
+                  {activeToolbarMenu === 'class' && (
+                    <div className="toolbar-menu-popout">
+                      {['Requirement', 'Spec', 'Design', 'Issue', 'DB', 'Process', ''].map(cls => (
+                        <button key={cls} className={`btn-icon-small ${cls ? `node-class-${cls.toLowerCase()}` : ''}`} onClick={(e) => { e.stopPropagation(); onUpdateNodesClass(cls); }} data-tooltip={cls ? `${cls}クラスを適用` : 'クラスを解除'} style={{ width: '32px', height: '32px', fontSize: '10px', fontWeight: 'bold', border: '1px solid #eee', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#fff' }}>
+                          {cls ? cls[0] : '✕'}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )
+            },
+            {
               id: 'reset',
               tooltip: '全リセット',
               icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>,
@@ -1183,6 +1309,7 @@ function Flow() {
                   <Component
                     key={item.id}
                     className={`btn-icon ${item.active ? 'active' : ''}`}
+                    active={item.active}
                     data-tooltip={item.tooltip}
                     onClick={item.onClick}
                     disabled={item.disabled}
