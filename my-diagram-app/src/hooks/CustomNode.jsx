@@ -58,6 +58,17 @@ const CustomNode = ({ id, data, selected }) => {
     }
   };
 
+  // [D-043] バッジを表示する対象のクラスを限定（NODEやCHILDなどは除外）
+  const semanticClasses = [
+    'node-class-requirement',
+    'node-class-spec',
+    'node-class-design',
+    'node-class-issue',
+    'node-class-db',
+    'node-class-process'
+  ];
+  const showBadge = data.nodeClass && semanticClasses.includes(data.nodeClass.toLowerCase());
+
   return (
     <div 
       className={`custom-node ${selected ? 'selected' : ''} ${isEdgeSourceCandidate ? 'edge-source-candidate' : ''} ${isPresenterSelected ? 'presenter-selected' : ''} ${data.nodeClass || ''}`} // クラスを追加
@@ -77,7 +88,7 @@ const CustomNode = ({ id, data, selected }) => {
       }}
     >
       <Handle type="target" position={Position.Left} />
-      {data.nodeClass && data.nodeClass !== '' && (
+      {showBadge && (
         <div className="node-class-badge">
           {data.nodeClass.replace('node-class-', '').toUpperCase()}
         </div>

@@ -911,13 +911,17 @@ function Flow() {
         const label = (yNode.data?.label || '').trim();
         const classRegex = /^(?:\[[A-Z0-9]+-\d+\]\s*)?(?:\[([^\]]+)\]|([^:：\s]+)[:：\s])/i;
         const match = label.match(classRegex);
+        
+        // [修正] NodeやChildなどの汎用ワードはクラスとして扱わない
+        const parsedClassName = match ? (match[1] || match[2]).toLowerCase().trim() : '';
+        const isGeneric = ['node', 'child', 'default'].includes(parsedClassName);
 
         // [D-044] 属性優先ロジック: 
         // UIから設定された nodeClass (属性) があればそれを最優先し、なければラベルから解析する
         const attrClass = yNode.data?.nodeClass;
         const nodeClass = (attrClass && attrClass !== '') 
           ? attrClass 
-          : (match ? `node-class-${(match[1] || match[2]).toLowerCase().trim()}` : '');
+          : (match && !isGeneric ? `node-class-${parsedClassName}` : '');
 
         const localNode = nodesRef.current.find(n => n.id === yNode.id);
         return {
