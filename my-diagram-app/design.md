@@ -155,16 +155,25 @@
     - [x] フォーカスモード解除時に、元のグラフ構造が欠損なく再表示されること。
 
 ## 23. [D-023] MCPサーバーのアーキテクチャ
-- **サーバー方式**: Node.js + `@modelcontextprotocol/sdk` を使用した stdio 通信。
+- **サーバー方式**: Node.js + `@modelcontextprotocol/sdk` を使用した **SSE (Server-Sent Events) 通信**。
+- **マルチクライアント管理**:
+    - 接続要求 (`/sse`) ごとに新しい `Server` インスタンスを生成し、一意な `sessionId` を持つ `SSEServerTransport` を確立する。
+    - アクティブなトランスポートを `Map` オブジェクト (`activeTransports`) で保持し、`/messages` エンドポイントへの POST リクエストを、クエリパラメータの `sessionId` を用いて適切なトランスポートへルーティングする。
+    - クライアントの切断 (`res.on("close")`) を検知し、サーバーインスタンスの破棄とトランスポートの削除を行うことでリソースリークを防止する。
 - **同期方式 (Yjs Bridge)**:
     - ブラウザ側の同期エンジンを `y-webrtc` から `y-websocket`（または併用）に拡張する。
     - ローカルで `y-websocket` サーバーを起動し、ブラウザと MCP サーバープロセスの両方が同一ルームに参加する。
     - MCP サーバーはヘッドレスな Yjs クライアントとして動作し、共有データを直接書き換える。
-- **依存ライブラリ**: `ws`, `y-websocket`, `@modelcontextprotocol/sdk`。
+- **提供ツールの属性連携**:
+    - `add_node` および `update_node` ツールにおいて、[D-043] で定義されたノードクラス（属性）を引数として受け取り、`yNodes` の `data.nodeClass` プロパティへ反映する。
+    - **原子性**: 削除操作 (`delete_node`) は `ydoc.transact` 内で実行し、ノードの削除と浮遊エッジ（Dangling Edges）のクリーンアップをアトミックに完了させる。
+- **依存ライブラリ**: `ws`, `y-websocket`, `@modelcontextprotocol/sdk`, `express`, `cors`。
 - **検証手順 (Test Spec)**:
     - [x] MCP インスペクターまたは Claude Desktop から `read_graph` を呼び出し、現在の図面内容が JSON で返ってくること。
-    - [ ] `add_node` ツールを呼び出した際、ブラウザ上のキャンバスに即座にノードが出現すること。
-    - [ ] 自動レイアウトが有効な場合、AI による編集後も正しく整列されること。
+    - [x] `add_node` ツールを呼び出した際、ブラウザ上のキャンバスに即座にノードが出現すること。
+    - [x] `add_node` 時の `nodeClass` 指定により、ノードの色とバッジが正しく設定されること。
+    - [x] 複数のクライアントが同時に `http://localhost:3000/sse` に接続しても、干渉せず独立して動作すること。
+    - [x] 自動レイアウトが有効な場合、AI による編集後も正しく整列されること。
 
 ## 24. [D-024] プロジェクト名編集の実装
 - **UI要素**:
