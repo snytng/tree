@@ -23,6 +23,8 @@
   { "from": "S-020", "to": "D-021", "type": "realizes" },
   { "from": "S-021", "to": "D-022", "type": "realizes" },
   { "from": "S-022", "to": "D-023", "type": "realizes" },
+  { "from": "S-022", "to": "D-045", "type": "realizes" },
+  { "from": "S-022", "to": "D-004", "type": "realizes" },
   { "from": "S-023", "to": "D-024", "type": "realizes" },
   { "from": "S-024", "to": "D-025", "type": "realizes" },
   { "from": "S-025", "to": "D-026", "type": "realizes" },
@@ -43,5 +45,5 @@
   { "from": "S-041", "to": "D-044", "type": "realizes" },
   { "from": "S-041", "to": "D-045", "type": "realizes" },
   { "from": "S-041", "to": "D-046", "type": "realizes" },
-  { "from": "S-042", "to": "D-047", "type": "realizes" }
+  { "from": "S-044", "to": "D-047", "type": "realizes" }
 ]

@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "dev:yjs": "cross-env HOST=0.0.0.0 y-websocket",
-    "dev:mcp": "node mcp-server/index.js",
+    "dev:mcp": "node --watch mcp-server/index.js",
     "start:all": "concurrently \"npm run dev:yjs\" \"npm run dev\" \"npm run dev:mcp\"",
     "build": "vite build",
     "lint": "eslint .",
