@@ -12,6 +12,90 @@
 
 ---
 
+## 43. [x] [B-043] MCPサーバーのマルチプロジェクト・マルチ図面対応 - Done
+- **概要**: MCPサーバーが固定ルーム (`react-flow-demo-room`) にしか接続できず、B-033（マルチプロジェクト）・B-038（ブロック図ビュー）で追加されたデータ構造にアクセスできない問題を解消する。
+- **背景**: B-033 でフロントエンドのルーム名が `mda_{projectId}` に変更されたにもかかわらず、MCPサーバー側が旧ルーム名のまま取り残された。影響分析ルールの不在により検出が遅れた。
+- **要求仕様**: [S-055], [S-056], [S-057]
+- **設計**: [D-058] マルチプロジェクト接続管理, [D-059] ブロック図ツール追加
+- **設計方針の要点**:
+    - ~~`list_projects` は提供せず、AIがprojectIdを直接指定する方式~~（設計変更: プロジェクトレジストリ経由で list_projects を提供。ID を直接指定する方式は AI が推測不可能なため）
+    - 既存5ツール (read_graph, add_node, connect_nodes, update_node, delete_node) は維持
+    - 新規9ツール追加: list_projects, switch_project, current_project, list_diagrams, read_diagram, add_node_to_diagram, add_edge_to_diagram, get_project_name, update_project_name
+- **検出経緯**: ドキュメント整備後のレビューでユーザーが気づいた。ルール違反レポート (2.93) 参照。
+
+## 33. [x] [B-033] マルチプロジェクト対応 - Done
+- **概要**: 複数のプロジェクトをlocalStorageベースで管理し、プロジェクトごとに独立したYjsルーム・IndexedDB永続化を行う機能。
+- **実装内容**:
+    - `projectStore.js`: プロジェクトCRUD、アクティブプロジェクト管理、ルーム名生成、タブ状態の保存/復元
+    - `initYjsForProject(projectId)`: プロジェクト切り替え時のYjsプロバイダー再初期化
+    - `switchProject()`: プロジェクト切り替えコールバック（タブ状態保存→Yjs再初期化→タブ状態復元）
+    - HMR時のYjsプロバイダークリーンアップ (`import.meta.hot.dispose`)
+
+## 34. [x] [B-034] グローバルコマンドバー (GlobalBar) - Done
+- **概要**: Linear/Figma風のグローバルコマンドバーを画面上部に配置。プロジェクト名表示・編集、図を開く、図を追加、ビュー追加ドロップダウンを統合したUI。
+- **実装内容**:
+    - `GlobalBar`コンポーネント: プロジェクト名（クリック=ブラウザ、ダブルクリック=編集）、「図を開く」「図を追加」「ビュー追加▾」ボタン
+    - 旧Panel (top-left) のプロジェクト名表示を削除し、GlobalBarに移行
+
+## 35. [x] [B-035] プロジェクト/ダイアグラムブラウザダイアログ - Done
+- **概要**: プロジェクト一覧やダイアグラム一覧をモーダルダイアログで閲覧・選択・リネーム・削除できるUI。
+- **実装内容**:
+    - `BrowserDialog.jsx`: 汎用モーダルブラウザダイアログ（検索、リネーム、削除確認）
+    - `ProjectBrowserDialog.jsx`: プロジェクト一覧用
+    - `DiagramBrowserDialog.jsx`: ブロック図一覧用
+
+## 36. [x] [B-036] タブバーとマルチビュー対応 - Done
+- **概要**: VS Code風タブバーを実装し、ノードグラフ・一覧表・ブロック図・プレースホルダなど複数ビューをタブで切り替えられる機能。
+- **実装内容**:
+    - `TabBar.jsx` / `TabBar.css`: タブ表示・切り替え・ダブルクリックリネーム・ドラッグ並び替え・右クリックコンテキストメニュー（閉じる/これ以外を閉じる/すべて閉じる）
+    - `VIEW_TYPES`定義: node-graph, table, block-diagram, function-flow
+    - `App.jsx`: タブ状態管理（tabs/activeTabId）、`closeTab`/`reorderTab`/`closeOtherTabs`/`closeAllTabs`コールバック
+    - タブ状態のlocalStorage永続化
+
+## 37. [x] [B-037] 一覧表ビュー (TableView) - Done
+- **概要**: ノードグラフのデータをExcel風スプレッドシートで閲覧・操作できるテーブルビュー。
+- **実装内容**:
+    - `TableView.jsx`: Yjs連携テーブル、右クリックメニュー（「図を開いてフォーカス」含む）
+    - `App.jsx`: `handleOpenDiagramFromTable`でテーブルから特定ノードへのフォーカス遷移
+
+## 38. [x] [B-038] ブロック図ビュー (BlockDiagramView) - Done
+- **概要**: ノードグラフの要素を自由配置で視覚化するブロック図ビュー。矩形・ひし形・楕円等のシェイプ、色・サイズ変更、エッジ接続をサポート。
+- **実装内容**:
+    - `BlockDiagramView.jsx` / `BlockDiagramView.css`: ブロック図のReactFlowベースキャンバス
+    - `ShapeNode.jsx`: 矩形・ひし形・角丸矩形・楕円・六角形の描画
+    - `FloatingEdge.jsx`: ノード境界からの浮動エッジ
+    - Yjsマップ `bdLayout_${diagramId}` / `bdEdges_${diagramId}` によるデータ管理
+    - `bdDiagramsMeta`によるダイアグラムメタ情報管理
+    - フォーカスノード対応（リトライ付きsetCenter）
+
+## 39. [x] [B-039] ノードグラフ右クリック・選択メニュー - Done
+- **概要**: ノードグラフで複数ノードを選択した状態で右クリックまたは左クリックすると操作メニューを表示する機能。メニューから「ブロック図を新規作成」「既存ブロック図に追加」を実行可能。
+- **実装内容**:
+    - `NodeGraphContextMenu`コンポーネント: メニューUI、サブメニュー（既存ブロック図一覧）、画面端の位置調整
+    - `onNodeContextMenu` / `onPaneContextMenu` / `onSelectionContextMenu`: 3つの右クリックハンドラ
+    - `onNodeClickWithMenu`: 複数選択中の左クリックでもメニュー表示
+    - `onSelectionChangeForMenu` + `prevSelectedNodeIdsRef`: ReactFlowの選択リセット問題への対応
+    - カスタムイベント `ngCreateDiagramWithNodes` / `ngOpenDiagramTab` でFlow→App間通信
+
+## 40. [x] [B-040] ノード追加時のクラス継承と固定ラベル - Done
+- **概要**: Ins/Enterで追加したノードが選択中ノードの`data.nodeClass`を継承する。ラベルは常に「New Node」固定。
+- **実装内容**:
+    - `onAddStructuredNode`: `baseClass`を選択ノードから取得しnewNodeに設定
+    - ラベルを`'New Node'`に統一（旧: `Child of ...` / `Sibling of ...`）
+
+## 41. [x] [B-041] ノード作成直後の自動編集モード - Done
+- **概要**: ノード選択中に文字キーを押すと自動的にインライン編集モードに入り、押した文字が初期値として入力される機能。
+- **実装内容**:
+    - `CustomNode.jsx`: `onKeyDown`ハンドラで英数字キー検出→編集モード開始（Ctrl/Alt/Meta/スペース除外）
+
+## 42. [x] [B-042] デバッグ情報の強化 - Done
+- **概要**: UI操作イベントのリングバッファログ(`[RF-Debug]`)を導入し、デバッグ情報コピーボタンの出力に直近20件のイベント履歴を含める機能。
+- **実装内容**:
+    - `rfDebug()`関数: コンソールログ＋リングバッファ蓄積（最大50件）
+    - `_rfDebugLog`: イベント履歴リングバッファ
+    - `onCopyDebugInfo`: タイムスタンプ、選択状態、ノード/エッジのselectedフラグ、recentEventsを出力
+    - `RF_DEBUG`フラグでログ出力のON/OFF切り替え
+
 ## 1. [x] [B-001] インライン編集機能 (Inline Editing) - Done
 - **概要**: ノードをダブルクリックすることで、その場でタイトル（ラベル）を編集できる機能。
 - **目的**: Markdownファイルを直接書き換えなくても、キャンバス上で直感的に思考を具体化できるようにする。編集内容は Yjs を通じて `projectFiles` (spec.md/design.md) に書き戻す。

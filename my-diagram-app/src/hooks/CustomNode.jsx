@@ -26,10 +26,21 @@ const CustomNode = ({ id, data, selected }) => {
     setIsEditing(true);
   }, []);
 
-  // F2キーでの編集開始
+  // F2キーでの編集開始 + 文字キーで自動編集モード
   useEffect(() => {
     const handleKeyDownGlobal = (e) => {
-      if (e.key === 'F2' && selected && !isEditing) {
+      if (!selected || isEditing) return;
+      if (['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return;
+
+      if (e.key === 'F2') {
+        setIsEditing(true);
+        return;
+      }
+
+      // 通常の文字キー入力で編集モードに入る（制御キーやショートカットは除外）
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.key.length === 1 && !e.key.match(/^[\s]$/)) {
+        setEditValue(e.key);
         setIsEditing(true);
       }
     };

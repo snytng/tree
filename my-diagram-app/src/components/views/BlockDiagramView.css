@@ -1,0 +1,306 @@
+/* ── ラッパー ───────────────────────────────── */
+.bd-wrapper {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+
+/* ── 左ツールバー ──────────────────────────── */
+.bd-toolbar {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 10;
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 6px;
+  gap: 3px;
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+.bd-toolbar::-webkit-scrollbar { display: none; }
+
+.bd-toolbar-btn {
+  width: 36px;
+  height: 36px;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #374151;
+  transition: background 0.12s, color 0.12s;
+  flex-shrink: 0;
+}
+.bd-toolbar-btn:hover          { background: #f3f4f6; }
+.bd-toolbar-btn.active         { background: #eff6ff; color: #2563eb; }
+.bd-toolbar-btn.danger         { color: #dc2626; }
+.bd-toolbar-btn.danger:hover   { background: #fef2f2; }
+.bd-toolbar-btn.small          { width: 30px; height: 30px; }
+.bd-toolbar-btn.small.active   { background: #eff6ff; color: #2563eb; }
+
+.bd-toolbar-sep {
+  width: 22px;
+  height: 1px;
+  background: #e5e7eb;
+  margin: 2px 0;
+  flex-shrink: 0;
+}
+
+.bd-toolbar-label {
+  font-size: 9px;
+  color: #9ca3af;
+  letter-spacing: 0.3px;
+  padding: 1px 0;
+  text-align: center;
+  line-height: 1.2;
+}
+
+/* ── スタイルパネル (選択時フローティング) ─── */
+.bd-style-panel {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.16);
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  font-family: system-ui, -apple-system, sans-serif;
+  pointer-events: all;
+}
+
+.bd-style-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.bd-style-label {
+  font-size: 11px;
+  color: #6b7280;
+  width: 50px;
+  flex-shrink: 0;
+  font-weight: 500;
+}
+
+/* 色スウォッチ */
+.bd-swatch {
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  border: 1.5px solid #d1d5db;
+  cursor: pointer;
+  outline: none;
+  transition: transform 0.1s, border-color 0.1s, box-shadow 0.1s;
+  flex-shrink: 0;
+}
+.bd-swatch:hover           { transform: scale(1.22); border-color: #9ca3af; }
+.bd-swatch.selected        { border-color: #2563eb; box-shadow: 0 0 0 2px #bfdbfe; }
+
+/* 形状ボタン */
+.bd-shape-btn {
+  width: 30px;
+  height: 24px;
+  border: 1.5px solid #e5e7eb;
+  border-radius: 5px;
+  cursor: pointer;
+  background: #ffffff;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 0.1s, background 0.1s;
+  flex-shrink: 0;
+}
+.bd-shape-btn:hover    { border-color: #9ca3af; background: #f9fafb; }
+.bd-shape-btn.selected { border-color: #2563eb; background: #eff6ff; }
+
+/* 枠線太さボタン */
+.bd-width-btn {
+  height: 24px;
+  padding: 0 10px;
+  border: 1.5px solid #e5e7eb;
+  border-radius: 5px;
+  cursor: pointer;
+  background: #ffffff;
+  font-size: 11px;
+  color: #374151;
+  transition: border-color 0.1s, background 0.1s, color 0.1s;
+}
+.bd-width-btn:hover    { border-color: #9ca3af; }
+.bd-width-btn.selected { border-color: #2563eb; background: #eff6ff; color: #2563eb; }
+
+/* エッジソース中のノード強調 */
+.bd-edge-src-hint {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(245, 158, 11, 0.85);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 20px;
+  pointer-events: none;
+  z-index: 100;
+  white-space: nowrap;
+  font-family: system-ui, sans-serif;
+}
+
+/* ── ノードピッカーパネル ────────────────────── */
+.bd-node-picker {  position: absolute;
+  left: 64px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 10;
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  width: 220px;
+  max-height: 400px;
+  display: flex;
+  flex-direction: column;
+  font-family: system-ui, -apple-system, sans-serif;
+  overflow: hidden;
+}
+
+.bd-node-picker-title {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #6b7280;
+  letter-spacing: 0.3px;
+  padding: 8px 12px 6px;
+  border-bottom: 1px solid #f3f4f6;
+  flex-shrink: 0;
+}
+
+.bd-node-picker-empty {
+  font-size: 12px;
+  color: #9ca3af;
+  text-align: center;
+  padding: 16px 12px;
+}
+
+.bd-node-picker-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #e5e7eb transparent;
+}
+
+.bd-node-picker-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.bd-node-picker-item:hover {
+  background: #f0f9ff;
+}
+.bd-node-picker-item:hover .bd-node-picker-add {
+  opacity: 1;
+  color: #2563eb;
+}
+
+.bd-node-picker-label {
+  font-size: 12px;
+  color: #111827;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bd-node-picker-add {
+  font-size: 16px;
+  color: #d1d5db;
+  opacity: 0.5;
+  transition: opacity 0.1s, color 0.1s;
+  flex-shrink: 0;
+  margin-left: 6px;
+}
+
+/* ── スタイルフライアウト ─────────────────────── */
+.bd-style-flyout {
+  position: absolute;
+  left: 64px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 10;
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  padding: 10px 12px;
+  font-family: system-ui, -apple-system, sans-serif;
+  min-width: 140px;
+}
+
+.bd-flyout-title {
+  font-size: 10px;
+  font-weight: 600;
+  color: #9ca3af;
+  letter-spacing: 0.4px;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+}
+
+/* 形状ボタンリスト */
+.bd-flyout-shapes {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.bd-flyout-shape-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border: 1.5px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+  color: #374151;
+  transition: background 0.1s, border-color 0.1s;
+  width: 100%;
+  text-align: left;
+}
+.bd-flyout-shape-btn:hover   { background: #f3f4f6; }
+.bd-flyout-shape-btn.selected { border-color: #2563eb; background: #eff6ff; color: #2563eb; }
+
+/* スウォッチグリッド */
+.bd-flyout-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-width: 176px;
+}
+
+/* 横並びボタン行 */
+.bd-flyout-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
