@@ -529,3 +529,192 @@
     - `pointer-events: none` を設定し、マウス操作を邪魔しないようにする。
 - **クリーンアップ**:
     - `onNodeClick` による接続完了、`onPaneClick` によるキャンセル、または `Escape` キー押下時に `edgeSourceId` を `null` に戻すことで、ラバーバンドを配列から除去する。
+
+## 48. [D-048] マルチプロジェクト管理の実装
+- **プロジェクトストア (`src/utils/projectStore.js`)**:
+    - `localStorage` に `mda_projects` キーでプロジェクト一覧を保持。
+    - CRUD操作: `getProjects()`, `createProject(name)`, `deleteProject(id)`, `renameProject(id, name)`, `getLastProjectId()`, `setLastProjectId(id)`。
+    - 各プロジェクトは `{ id, name, createdAt }` 構造。IDは `crypto.randomUUID()` で生成。
+- **Yjs初期化 (`initYjsForProject(projectId)` in App.jsx)**:
+    - `let _ydocInst`, `let _providerInst` 等のモジュールレベル変数で現在のYjsインスタンスを管理。
+    - プロジェクト切替時: 旧プロバイダの `destroy()` → 新 `Y.Doc` 作成 → WebRTC/WebSocket/IndexedDB プロバイダを新ルーム名 `mda_proj_{projectId}_{suffix}` で再作成。
+    - 初期化後、Yjsマップ (`yNodes`, `yEdges`, `yProjectMeta` 等) への observe を設定。
+- **タブ状態永続化**:
+    - `localStorage.getItem(`mda_tabs_${projectId}`)` でプロジェクト別にタブ配列・アクティブタブIDを保存。
+    - プロジェクト切替・リロード時に復元。
+- **HMR対応**:
+    - `import.meta.hot.dispose` でプロバイダのみ `destroy()`。`ydoc` はコンポーネントが参照中のため破棄しない。
+- **検証手順 (Test Spec)**:
+    - [x] `initYjsForProject` を異なるIDで呼ぶと、ルーム名が変わりデータが分離されること。
+    - [x] HMR発動後もYjsデータが失われないこと。
+
+## 49. [D-049] グローバルコマンドバーの実装 (GlobalBar)
+- **コンポーネント**: App.jsx内のインラインJSX（`<div className="global-bar">`）。
+- **レイアウト**: `display: flex`, `align-items: center`, 高さ36px, 背景 `#1e1e2e`。
+- **プロジェクト名**:
+    - `<span>` 表示 + `onClick` でプロジェクトブラウザ表示。
+    - `onDoubleClick` で `isEditingProjectName` ステートをON → `<input>` に切替 → `onBlur`/`Enter` で `yProjectMeta.set('projectName', value)` に同期。
+- **アクションボタン**:
+    - 「図を開く」: `setShowDiagramBrowser(true)` → `DiagramBrowserDialog` 表示。
+    - 「図を追加」: `onCreateDiagram()` → `bdDiagramsMeta` にエントリ追加 → 新タブ自動追加。
+    - 「ビュー追加 ▾」: `showViewMenu` ステートでドロップダウン表示。`VIEW_TYPES` 配列からタイプ選択 → 新タブ追加。
+- **スタイリング**: `.global-bar`, `.global-bar-btn`, `.global-bar-project-name` 等のCSS。
+
+## 50. [D-050] ブラウザダイアログの実装
+- **共通基盤 `BrowserDialog.jsx`**:
+    - props: `open`, `onClose`, `title`, `items`, `onSelect`, `onRename`, `onDelete`, `onCreate`, `createLabel`。
+    - モーダルオーバーレイ（`position: fixed`, `z-index: 1000`）。
+    - 検索フィルタ: `<input>` で `items` を `name` プロパティでフィルタリング。
+    - インラインリネーム: ダブルクリックで `editId` ステートをセット → `<input>` 表示 → `onBlur`/`Enter` で `onRename(id, newName)` 呼出。
+    - 削除: ゴミ箱アイコン → `window.confirm()` 確認 → `onDelete(id)` 呼出。
+- **`ProjectBrowserDialog.jsx`**: `BrowserDialog` をラップ。`projectStore` の CRUD を props に接続。選択時 `switchProject(id)` 呼出。
+- **`DiagramBrowserDialog.jsx`**: `BrowserDialog` をラップ。`bdDiagramsMeta` から図一覧を取得。選択時に該当ブロック図タブを開く。
+
+## 51. [D-051] タブバーとマルチビュー管理の実装
+- **コンポーネント**: `src/components/TabBar.jsx` + `TabBar.css`。
+- **ドラッグ＆ドロップ**:
+    - HTML5 Drag API: `draggable`, `onDragStart` で `dragTabId` セット、`onDragOver` で `dropTarget` セット（視覚的ドロップインジケータ）、`onDrop` で `onReorder(dragTabId, dropIndex)` 呼出。
+    - ドラッグ中のタブに `.tab-dragging` クラス（半透明化）。
+- **右クリックコンテキストメニュー**:
+    - `onContextMenu` で `ctxMenu` ステート（`{ x, y, tabId }`）をセット。
+    - メニュー項目: 「閉じる」(`onTabClose`)、「これ以外を閉じる」(`onCloseOthers`)、「すべて閉じる」(`onCloseAll`)。
+    - `ctxRef` + `useEffect` のクリックアウトサイドで閉じる。
+- **タブリネーム**: ダブルクリック → `editTabId` ステートをセット → `<input>` 切替 → `onBlur`/`Enter` で `onTabRename(id, newName)` 呼出。
+- **App.jsx側のコールバック**:
+    - `reorderTab(dragId, dropIdx)`: `setTabs` で配列を入れ替え。
+    - `closeOtherTabs(tabId)`: 指定タブ以外をすべて閉じ、指定タブをアクティブに。
+    - `closeAllTabs()`: 全タブクリア、デフォルトのノードグラフタブを再作成。
+- **ビュールーティング**: `activeTab.type` に応じて `Flow`, `TableView`, `BlockDiagramView`, `PlaceholderView` を描画。`VIEW_TYPES` 定数配列でタイプ定義。
+
+## 52. [D-052] 一覧表ビューの実装 (TableView)
+- **コンポーネント**: `src/components/views/TableView.jsx`。
+- **データソース**: `yNodes` (Yjs共有Map) を `useEffect` で observe し、ノード一覧を配列化。
+- **テーブル描画**: HTML `<table>` でID、ラベル、クラス、親ノードなどを列表示。
+- **右クリックメニュー**:
+    - 行右クリックで `ctxMenu` ステートをセット。
+    - 「図を開いてフォーカス」: `onOpenDiagramAndFocus(nodeId)` コールバック → App.jsx側で対象ノードが含まれるブロック図タブを開き、`focusNodeId` ステートをセット。
+- **Yjs連携**: `yNodes.observe` で変更をリアルタイム反映。ノードの追加/削除/更新が即座にテーブルに反映。
+
+## 53. [D-053] ブロック図ビューの実装 (BlockDiagramView)
+- **コンポーネント**: `src/components/views/BlockDiagramView.jsx` + `BlockDiagramView.css`。
+- **カスタムノード `ShapeNode`** (`src/components/views/block-diagram/ShapeNode.jsx`):
+    - SVGベースで矩形、ひし形、角丸矩形、楕円、六角形を描画。
+    - リサイズハンドル（右下角）: `onMouseDown` → `onMouseMove` でサイズ変更 → `onMouseUp` でYjsに永続化。
+    - カラーピッカー: 選択時に背景色・枠線色・文字色を変更するUIを表示。
+- **カスタムエッジ `FloatingEdge`** (`src/components/views/block-diagram/FloatingEdge.jsx`):
+    - ノード境界の最近接点を計算して接続。ノードの移動・リサイズに追従。
+- **データ管理**:
+    - `bdLayout_{diagramId}` (Y.Map): ノードの位置・サイズ・シェイプ・色情報。
+    - `bdEdges_{diagramId}` (Y.Map): エッジ情報。
+    - `bdDiagramsMeta` (Y.Map): ダイアグラムのメタ情報（ID、名前、作成日時）。
+    - ノードグラフ (`yNodes`) からラベル・クラス情報を取得。ブロック図独自のレイアウト情報と組み合わせ。
+- **フォーカス機能**:
+    - `focusNodeId` prop を受け取り、`reactFlowInstance.setCenter(x, y, { zoom: 1.5, duration: 600 })` で移動。
+    - ノードが `onNodesChange` で配置完了するまでリトライ（100ms, 300ms, 600ms の3段階タイマー）。
+- **ノード追加モード**: ブロック図ビュー内でも `isAddNodeMode` をサポート。`onPaneClick` で新規ノードをクリック位置に追加。
+
+## 54. [D-054] ノードグラフ選択メニューの実装
+- **3つの右クリックハンドラ + 左クリックハンドラ** (App.jsx内Flow):
+    - `onNodeContextMenu(event, node)`: 単一ノード右クリック。`selectedNodeIdsRef` + `prevSelectedNodeIdsRef` を参照してメニュー表示。
+    - `onSelectionContextMenu(event)`: ReactFlow 11が複数選択右クリック時に発火。`selectedNodeIdsRef` を使用。
+    - `onPaneContextMenu(event)`: 背景右クリック。`selectedNodeIdsRef.current.size > 0` の場合のみメニュー表示。
+    - `onNodeClickWithMenu(event, node)`: 左クリック。`prevSelectedNodeIdsRef` に複数ノードがあった場合のみメニュー表示（ReactFlowが mousedown で選択をリセットするため、直前状態を使用）。
+- **選択状態トラッキング**:
+    - `onSelectionChangeForMenu({ nodes })`: `onSelectionChange` コールバック。`selectedNodeIdsRef` を更新した後、前回値を `prevSelectedNodeIdsRef` にコピー。`rfDebug` でログ出力。
+- **メニューUI (`NodeGraphContextMenu`)**:
+    - `position: fixed` で `menuPos` 座標に表示。
+    - 「ブロック図を新規作成」: `onCreateDiagram()` → 選択ノードのレイアウト初期化 → 新タブ追加。
+    - 「既存ブロック図に追加 ▸」: サブメニューで `bdDiagramsMeta` の一覧表示 → 選択で `addNodesToDiagram(diagramId, nodeIds)` 呼出。
+    - クリックアウトサイド/Escape で閉じる。
+
+## 55. [D-055] ノード追加時のクラス継承ロジック
+- **対象関数**: `onAddStructuredNode(relation, nodeId)` in App.jsx。
+- **実装**:
+    - `relation` が `child`, `sibling`, `insertAbove`, `insertLeft` いずれの場合も、基準ノードの `data.nodeClass` を取得し `baseClass` に設定。
+    - 新ノードの `data` オブジェクトに `nodeClass: baseClass` を設定してYjsに書き込み。
+- **ラベル統一**: 全パターンで `label: 'New Node'` 固定。旧: `Child of ${parentLabel}`, `Sibling of ${siblingLabel}` → 廃止。
+
+## 56. [D-056] ノード作成直後の自動編集モード
+- **対象コンポーネント**: `src/hooks/CustomNode.jsx`。
+- **キーイベントハンドリング**:
+    - `useEffect` 内で `document.addEventListener('keydown', handler)`。
+    - `handler`: ノードが `selected` かつ `!isEditing` の場合、以下の条件で編集モードを開始:
+        - `e.key.length === 1`（単一文字キー）。
+        - `!e.ctrlKey && !e.altKey && !e.metaKey`（修飾キーなし）。
+        - `e.key !== ' '`（スペースを除外）。
+    - 条件合致時: `setIsEditing(true)` → `setEditValue(e.key)` → `e.preventDefault()`。
+- **F2キー**: 従来通り `e.key === 'F2'` で `setIsEditing(true)`, `setEditValue(data.label)` を実行。
+
+## 57. [D-057] デバッグ情報強化の実装
+- **リングバッファログ (`rfDebug()`)**:
+    - `const _rfDebugLog = []` (モジュールスコープ)、最大50件。
+    - `function rfDebug(label, detail)`: `RF_DEBUG` フラグが `true` の場合、`console.log('[RF-Debug]', label, detail)` 出力 + `_rfDebugLog.push({ t: Date.now(), label, detail })`。50件超過時は `shift()`。
+- **呼び出し箇所**:
+    - `onSelectionChangeForMenu`: 選択ノード数とIDリスト。
+    - `onNodeClickWithMenu`: クリックされたノードID、現在/前回選択数。
+    - `onNodeContextMenu`: 右クリックされたノードID、選択数。
+    - `onPaneContextMenu`: 選択数。
+    - `onSelectionContextMenu`: 選択数。
+    - メニュー表示/非表示のタイミング。
+- **`onCopyDebugInfo` 出力内容の拡張**:
+    - `timestamp`: ISO 8601文字列。
+    - `selectedNodeCount`, `selectedNodeIds`: 現在の選択状態。
+    - `nodes`: 各ノードの `{ id, label, nodeClass, selected, position }` 配列。
+    - `edges`: 各エッジの `{ id, source, target, selected }` 配列。
+    - `recentEvents`: `_rfDebugLog.slice(-20)` の直近20件。
+
+## 58. [D-058] MCPサーバーのマルチプロジェクト接続管理
+- **現状の問題**: MCPサーバーがモジュールスコープで固定ルーム名 `react-flow-demo-room` にYjs接続しており、`mda_{projectId}` 形式のルームに切り替えられない。
+- **設計方針**: モジュールスコープの固定Yjs接続を廃止し、プロジェクト切り替え可能な動的接続管理に変更する。
+- **接続管理モジュール (`YjsConnectionManager`)**:
+    - モジュールスコープに `currentProjectId`、`ydoc`、`wsProvider`、`yNodes`、`yEdges`、`yProjectMeta`、`yBdMeta` を保持する。
+    - `connectToProject(projectId)` 関数: 既存のprovider/docをdestroy後、新しいY.Docを生成し `ws://localhost:1234` + `mda_{projectId}` (または `getRoomName()` の結果) で接続。全Yjsマップ参照を再取得する。
+    - `getCurrentProject()`: 現在のprojectId/roomNameを返す。
+    - `getYMaps()`: `{ yNodes, yEdges, yProjectMeta, yBdMeta }` を返す。`yBdMeta` は `ydoc.getMap('bdDiagramsMeta')`。
+    - `getBdMaps(diagramId)`: `{ yBdLayout: ydoc.getMap('bdLayout_' + diagramId), yBdEdges: ydoc.getMap('bdEdges_' + diagramId) }` を返す。`diagramId === 'default'` の場合はサフィックスなし。
+- **起動時のデフォルト接続**: サーバー起動時は `connectToProject(null)` で接続なし状態、または環境変数 `DEFAULT_PROJECT_ID` が設定されている場合はそのプロジェクトに接続。
+- **プロジェクト一覧の取得元**: MCPサーバーはlocalStorageを持たないため、プロジェクト一覧は独立には提供できない。代替手段:
+    1. y-websocketサーバーの既知ルーム名をスキャンする方法は非現実的。
+    2. **フロントエンド側にHTTP APIを追加**し、MCPサーバーからlocalStorageのプロジェクト一覧を取得する。
+    3. **MCPツールの引数でprojectIdを直接指定**させ、一覧はAIがフロントエンドのデバッグ情報等から取得する前提とする。
+    → 方式3を採用。`list_projects` は提供せず、`switch_project` でprojectIdを直接指定する。AIにはデバッグ情報コピーやREADMEなどからプロジェクトIDを伝える運用とする。
+- **検証手順 (Test Spec)**:
+    - [ ] 起動時は未接続（またはデフォルトプロジェクトに接続）状態であること。
+    - [ ] `switch_project` で有効なprojectIdを指定すると、接続先が切り替わること。
+    - [ ] 切り替え後に `read_graph` が新プロジェクトのノードを返すこと。
+    - [ ] 同一プロジェクトへの再接続は冪等（エラーなし）であること。
+
+## 59. [D-059] MCPサーバーのブロック図ツール追加
+- **新規MCPツール**:
+
+| ツール名 | 説明 | 入力 | 出力 |
+| :--- | :--- | :--- | :--- |
+| `switch_project` | Yjsルームを指定プロジェクトに切り替え | `projectId: string` | 接続先ルーム名 |
+| `current_project` | 現在の接続先プロジェクト情報 | (なし) | `{ projectId, roomName }` |
+| `list_diagrams` | ブロック図一覧を取得 | (なし) | `[{ id, name, createdAt }]` |
+| `read_diagram` | ブロック図データを読み取り | `diagramId: string` | `{ nodes: [{id, label, nodeClass, position, shape, ...}], edges: [{id, source, target, label?}] }` |
+| `add_node_to_diagram` | ブロック図にノードを配置 | `diagramId, nodeId?, label?, nodeClass?, position?, shape?` | 配置結果 |
+| `add_edge_to_diagram` | ブロック図にエッジを追加 | `diagramId, source, target, label?` | 作成結果 |
+| `get_project_name` | プロジェクト名を取得 | (なし) | `{ name }` |
+| `update_project_name` | プロジェクト名を更新 | `name: string` | 更新結果 |
+
+- **`read_diagram` のデータ結合ロジック**:
+    1. `yBdLayout = ydoc.getMap('bdLayout_' + diagramId)` からレイアウト付きノードIDを取得。
+    2. 各ノードIDで `yNodes.get(nodeId)` からラベル・クラスを取得。
+    3. `yBdLayout` のposition/shape/colorと結合して返す。
+    4. `yBdEdges = ydoc.getMap('bdEdges_' + diagramId)` からエッジを取得して返す。
+- **`add_node_to_diagram` のロジック**:
+    - `nodeId` が指定されている場合: 既存ノードをブロック図に配置（`yBdLayout.set()` のみ）。
+    - `nodeId` が未指定の場合: まず `yNodes` に新規ノードを追加し、続けて `yBdLayout` に配置。1つのトランザクション内で実行。
+    - デフォルト `position`: `{ x: 0, y: 0 }`。デフォルト `shape`: `'rect'`。
+- **既存ツールの変更**:
+    - `read_graph`, `add_node`, `connect_nodes`, `update_node`, `delete_node` は現在の仕様を維持。
+    - ただし `connectToProject()` 後の動的Yjsマップ参照を使用するよう内部実装を変更。
+- **検証手順 (Test Spec)**:
+    - [ ] `list_diagrams` で `bdDiagramsMeta` のエントリが返ること。
+    - [ ] `read_diagram` でノードのラベル・クラスとブロック図のレイアウト情報が結合されて返ること。
+    - [ ] `add_node_to_diagram` で既存ノードIDを指定した場合、ブロック図にのみ追加されること。
+    - [ ] `add_node_to_diagram` でノードID未指定の場合、ノードグラフとブロック図の両方に追加されること。
+    - [ ] `add_edge_to_diagram` でブロック図にエッジが追加されること。
+    - [ ] `get_project_name` でプロジェクト名が返ること。
+    - [ ] `update_project_name` で名前を変更し、フロントエンドにリアルタイム反映されること。

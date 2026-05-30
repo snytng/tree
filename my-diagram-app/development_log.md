@@ -527,3 +527,105 @@ Vite + React + React Flowで、ノード（四角）とエッジ（線）を動�
     - 本機能を正式に承認。`backlog.md` のステータスを `[x] Done` に更新。
 - **状況**: 完了 (Done)。
 - **次のステップ**: ユーザーの指示に基づき次のバックログ項目へ。
+
+## 2.91 [B-033〜B-042] 遡及的ドキュメント整備 (2026-05-30 00)
+- **対応内容**: 
+    - `git diff main` から抽出した実装済み10機能 (B-033〜B-042) について、`development_rules.md` のドキュメントファースト原則に基づき遡及的にドキュメントを整備。
+    - `backlog.md`: B-033〜B-042 を起票・Done ステータスで追加。
+    - `spec.md`: S-045〜S-054 の10件を追加（マルチプロジェクト管理、GlobalBar、ブラウザダイアログ、タブバー、一覧表ビュー、ブロック図ビュー、選択メニュー、クラス継承、自動編集モード、デバッグ強化）。
+    - `design.md`: D-048〜D-057 の10件を追加（各仕様に対応する実装設計の詳細）。
+    - `mapping.json`: S-045→D-048 〜 S-054→D-057 のトレーサビリティ10件を追加。
+- **状況**: 完了 (Done)。
+- **次のステップ**: ユーザーの指示に基づき次のバックログ項目へ。
+
+## 2.92 ドキュメント体系の整備と更新フロー策定 (2026-05-30 22:06)
+- **対応内容**: 
+    - `README.md`: 機能一覧をカテゴリ別（コア/マルチビュー/編集/外部連携/UI）に再構成。マルチプロジェクト、タブ管理、ブロック図、選択メニュー等の新機能を追加。技術スタックを React 19 / Vite 8 / SSE 等に更新。
+    - `USAGE.md`: Part I（セットアップ）/ Part II（使い方ガイド）の2部構成に再編。セクション6〜8（画面操作、ノードグラフ、ブロック図）とセクション9（AI連携 MCPの使い方：ツール一覧・使用例）を新設。
+    - `development_rules.md`: セクション1.4「ドキュメント更新フロー」を追加。更新タイミング×対象ドキュメントの一覧表と区切り時の4項目チェックリストを定義。
+- **状況**: 完了 (Done)。ルール1.4チェックリスト全項目クリア。
+- **次のステップ**: ユーザーの指示に基づき次のバックログ項目へ。
+
+## 2.93 ルール違反レポート: MCPサーバーの取り残し検出と再発防止 (2026-05-30 22:13)
+- **検出された問題**:
+    - MCPサーバー (`mcp-server/index.js`) が固定ルーム名 `react-flow-demo-room` にハードコードされたまま、B-033（マルチプロジェクト）で導入された動的ルーム名 `mda_{projectId}` に対応していなかった。
+    - B-038（ブロック図ビュー）で追加された `bdLayout_*`, `bdEdges_*`, `bdDiagramsMeta` のYjsマップにもアクセスできない状態だった。
+    - 結果として、デフォルトプロジェクト以外ではMCPサーバーが全く機能しない状態。
+- **なぜ見逃したか（根本原因分析）**:
+    1. **影響分析ルールの不在**: `development_rules.md` にデータモデル変更時の横断的影響チェック手順が定義されていなかった。B-033でルーム名体系を変更した際、「このルーム名を参照している他のコンポーネントは何か？」という問いを立てるトリガーがなかった。
+    2. **遡及ドキュメント整備時の視点の偏り**: B-033〜B-042のドキュメントを遡及的に整備した際、「実装されたものを記述する」ことに集中し、「実装されるべきだったが漏れているもの」の検出を行わなかった。既存コンポーネント（MCPサーバー）との整合性検証が手順に含まれていなかった。
+    3. **B-032とB-033の分断**: B-032（MCPサーバー高度化）が先にDoneになり、その後B-033（マルチプロジェクト）が実装された。B-033の実装時にB-032への影響を検討するフィードバックループが欠如していた。
+- **再発防止策**:
+    - `development_rules.md` セクション2.5「横断的影響分析」を新設。データモデル変更・通信プロトコル変更・外部I/F変更の3カテゴリで影響分析を義務化。
+    - 影響先チェックリスト（フロントエンド / MCPサーバー / 永続化 / 通信）を定義。
+- **対応**: `backlog.md` に [B-043] MCPサーバーのマルチプロジェクト・マルチ図面対応を起票。
+- **次のステップ**: B-043 の要求定義・設計フェーズへ（ユーザー指示待ち）。
+
+## 2.94 mapping.json の構造拡張とトレーサビリティ強化 (2026-05-30 22:31)
+- **対応内容**:
+    - `mapping.json` を フラット配列から4セクション構造に拡張:
+        - `traceability`: S→D の縦方向の実現関係（既存、58件）
+        - `dependencies`: D→D の横方向の依存・影響関係（新設、21件）。`impacts`（変更が前提を壊す）と `depends-on`（正常動作が他に依存）の2タイプ
+        - `implementations`: D→ファイルパスの実装対応（新設、57設計分）
+        - `sharedResources`: 共有リソース（Yjsマップ名、localStorageキー、エンドポイント等）と使用元D-ID・ファイル一覧（新設、12リソース）
+    - `development_rules.md` セクション1.2: mapping.json の4セクションスキーマと関係タイプ定義を追加
+    - `development_rules.md` セクション2.5: `mapping.json` の `sharedResources` → `dependencies` を辿る具体的な影響分析手順を追加。`mapping.json` 更新義務を明記
+    - `development_rules.md` セクション4: 影響分析と `implementations` 更新を備忘録に追加
+- **設計意図**:
+    - 今回のMCPルーム名問題は `sharedResources` の「Yjs room name」→ `usedBy: [D-001, D-023, D-048]` → `files: [src/App.jsx, mcp-server/index.js, projectStore.js]` で機械的に発見可能だった
+    - チェックリストだけでは形骸化リスクがあるため、共有リソースレジストリを中心とした構造的な影響探索手順を定義
+- **状況**: 完了 (Done)。
+- **次のステップ**: ユーザーの指示に基づき B-043 の要求定義・設計フェーズへ。
+
+## 2.95 B-043 要求定義・設計起案 (2026-05-30 22:31)
+- **対応内容**: MCPサーバーのマルチプロジェクト・マルチ図面対応の要求定義と設計を起案。
+- **追加した仕様**: [S-055] マルチプロジェクト対応, [S-056] ブロック図操作対応, [S-057] プロジェクトメタデータ操作
+- **追加した設計**: [D-058] マルチプロジェクト接続管理, [D-059] ブロック図ツール追加
+- **設計上の主要決定**:
+    1. `list_projects` は提供しない。MCPサーバーはlocalStorageを持たないため、AIがprojectIdを直接指定する方式を採用。
+    2. 既存5ツール (read_graph, add_node, connect_nodes, update_node, delete_node) はそのまま維持。
+    3. 新規8ツール追加: `switch_project`, `current_project`, `list_diagrams`, `read_diagram`, `add_node_to_diagram`, `add_edge_to_diagram`, `get_project_name`, `update_project_name`。
+    4. `YjsConnectionManager` パターンでモジュールスコープの固定接続を動的接続に置換。
+- **影響分析** (mapping.json sharedResources 活用):
+    - 「Yjs room name」リソース → D-058 追加
+    - 「yNodes」「yEdges」「yProjectMeta」「bdDiagramsMeta」「bdLayout_*/bdEdges_*」「ws://localhost:1234」→ D-058/D-059 追加
+    - dependencies: D-058→D-023 (impacts), D-059→D-023 (impacts), D-058→D-048 (depends-on), D-059→D-053 (depends-on) を追加
+- **状況**: 完了 (Done)。
+
+## 2.96 B-043 実装完了 (2026-05-30 22:56)
+- **対応内容**: `mcp-server/index.js` を全面改修。
+- **変更点**:
+    1. モジュールスコープの固定ルーム接続 (`ROOM_NAME = 'react-flow-demo-room'`) を廃止。
+    2. `connectToProject(projectId)` による動的接続管理を導入。起動時は未接続状態。
+    3. `ensureConnected()` ガードで、プロジェクト未接続時の全ツール呼び出しをエラーにする。
+    4. `getYMaps()` / `getBdMaps(diagramId)` で動的にYjsマップ参照を取得。
+    5. 既存5ツール (read_graph, add_node, connect_nodes, update_node, delete_node) を動的参照に移行。
+    6. 新規8ツール実装: switch_project, current_project, list_diagrams, read_diagram, add_node_to_diagram, add_edge_to_diagram, get_project_name, update_project_name。
+    7. バージョンを `1.0.0` → `2.0.0` に更新。
+- **レビュー指摘反映**: `get_project_meta` → `get_project_name` に修正（対称性）。
+- **ドキュメント更新**: USAGE.md セクション9.1をカテゴリ別ツール表に更新、使用例追加、注意書き更新。
+- **動作確認**: 構文チェックOK、サーバー起動OK、SSEセッション確立OK。
+- **状況**: 完了 (Done)。
+
+## 2.97 B-043 バグ修正: ルーム名解決とプロジェクトレジストリ追加 (2026-05-30 23:20)
+- **経緯**: テスト中に MCP サーバーがノード/エッジ情報を全く取得できないバグを発見。
+- **根本原因 1: ルーム名の不一致**
+    - `switch_project` が常に `mda_{projectId}` をルーム名にしていた。
+    - しかし `proj_default` の実際のルーム名は `legacyRoom: 'react-flow-demo-room'`。
+    - MCP サーバーには `projectStore.getRoomName()` のロジックが移植されていなかった。
+- **根本原因 2: AI がプロジェクト ID を知る手段がなかった**
+    - B-043 設計方針「`list_projects` は提供しない」としていたが、実際には AI がプロジェクト ID を推測で試行（P1, proj_P1, proj_default, p1 ...）しており、全て空ルームに接続。
+    - 設計判断の誤り（ID が不明では接続できない）。
+- **修正内容**:
+    1. **`src/utils/projectRegistry.js` 新規作成**: フロントエンドがプロジェクト一覧（id, name, roomName）を Yjs レジストリルーム `mda__registry` に公開する機構。起動時に `initProjectRegistry()` を呼び出し、プロジェクト変更時（作成・削除・名前変更）に `syncProjectRegistry()` で同期。
+    2. **`mcp-server/index.js` 修正**:
+        - `initRegistry()`: 起動時に `mda__registry` を購読し、プロジェクト一覧をメモリに保持。
+        - `resolveRoomName(projectId)`: レジストリからルーム名を自動解決（fallback: `mda_{projectId}`）。
+        - `list_projects` ツール新規追加: レジストリから全プロジェクト一覧（id, name, roomName付き）を返す。
+        - `switch_project` 改修: `roomName` 省略時にレジストリから自動解決。
+        - `connectToProject` 改修: 同期完了を `await` で待機（最大3秒）してから応答。
+    3. **`src/App.jsx`**: `initProjectRegistry()` を起動時に呼び出し、HMR dispose でクリーンアップ。
+    4. **`src/components/ProjectBrowserDialog.jsx`**: 新規作成・削除・名前変更後に `syncProjectRegistry()` を呼び出し。
+- **動作確認**: レジストリに2プロジェクト確認 (proj_default: react-flow-demo-room, proj_mpsfmee3_61us: mda_proj_mpsfmee3_61us)。AIによる list_projects → switch_project → read_graph / add_node / connect_nodes / update_node を2プロジェクト跨ぎで実行成功。
+- **USAGE.md 更新**: `list_projects` ツール追加、使用フロー説明の改訂、注意書き更新。
+- **状況**: テスト完了 (Done)。

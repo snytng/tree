@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReactFlow, {
   addEdge,
   Background,
@@ -30,16 +30,70 @@ import RubberBandEdge from './components/RubberBandEdge';
 import { getLayoutedElements } from './utils/layoutEngine';
 import { isDescendant, parseHierarchyText, generateHierarchyText } from './utils/graphUtils';
 import ModernToolbar from './components/ModernToolbar';
+import TabBar, { VIEW_TYPES } from './components/TabBar';
+import TableView from './components/views/TableView';
+import BlockDiagramView from './components/views/BlockDiagramView';
+import PlaceholderView from './components/views/PlaceholderView';
+import * as PS from './utils/projectStore.js';
+import { initProjectRegistry, syncProjectRegistry, destroyProjectRegistry } from './utils/projectRegistry.js';
+import ProjectBrowserDialog from './components/ProjectBrowserDialog.jsx';
+import DiagramBrowserDialog from './components/DiagramBrowserDialog.jsx';
 
-const ROOM_NAME = 'react-flow-demo-room';
-// Yjsドキュメントの初期化
-const ydoc = new Y.Doc();
-// 部屋名 'react-flow-demo-room' でWebRTCプロバイダーを設定
-const provider = new WebrtcProvider(ROOM_NAME, ydoc);
-// [D-023] MCP連携用のWebSocketプロバイダーを追加 (ローカルの同期サーバー経由)
-const wsProvider = new WebsocketProvider(`ws://${window.location.hostname}:1234`, ROOM_NAME, ydoc);
-// ローカルストレージ（IndexedDB）への永続化
-const indexeddb = new IndexeddbPersistence(ROOM_NAME, ydoc);
+// デバッグログ（ブラウザコンソールで [RF-Debug] でフィルタ可能）
+// 直近のイベントをリングバッファに保持し、デバッグ情報コピーに含める
+const RF_DEBUG = true; // false にするとログ出力停止
+const _rfDebugLog = [];           // リングバッファ
+const RF_DEBUG_MAX_ENTRIES = 50;   // 保持する最大件数
+const rfDebug = (...args) => {
+  if (!RF_DEBUG) return;
+  const ts = new Date().toISOString().slice(11, 23); // HH:mm:ss.SSS
+  const entry = { ts, msg: args[0], data: args[1] ?? null };
+  _rfDebugLog.push(entry);
+  if (_rfDebugLog.length > RF_DEBUG_MAX_ENTRIES) _rfDebugLog.shift();
+  console.log('[RF-Debug]', ...args);
+};
+
+/* ── Yjs プロバイダー（プロジェクト切り替えで再初期化される） ── */
+let _ydocInst      = null;
+let _providerInst  = null;
+let _wsProviderInst = null;
+let _indexeddbInst = null;
+
+function initYjsForProject(projectId) {
+  try { _providerInst?.destroy();   } catch {}
+  try { _wsProviderInst?.destroy(); } catch {}
+  try { _indexeddbInst?.destroy();  } catch {}
+  try { _ydocInst?.destroy();       } catch {}
+
+  const roomName    = PS.getRoomName(projectId);
+  _ydocInst         = new Y.Doc();
+  _providerInst     = new WebrtcProvider(roomName, _ydocInst);
+  try {
+    _wsProviderInst = new WebsocketProvider(
+      `ws://${window.location.hostname}:1234`, roomName, _ydocInst
+    );
+  } catch { _wsProviderInst = null; }
+  _indexeddbInst    = new IndexeddbPersistence(roomName, _ydocInst);
+  return _ydocInst;
+}
+
+// 起動時に初期化
+let ydoc = initYjsForProject(PS.getActiveProjectId());
+
+// プロジェクトレジストリ初期化（MCPサーバーがプロジェクト一覧を取得するため）
+initProjectRegistry();
+
+// HMR時にYjsプロバイダーをクリーンアップ（開発モードの重複ルームエラー防止）
+if (import.meta.hot) {
+  import.meta.hot.accept();
+  import.meta.hot.dispose(() => {
+    try { _providerInst?.destroy();   } catch {}
+    try { _wsProviderInst?.destroy(); } catch {}
+    try { _indexeddbInst?.destroy();  } catch {}
+    destroyProjectRegistry();
+    // ydoc は destroy しない（コンポーネントが参照中の可能性あり）
+  });
+}
 
 const initialNodes = [];
 const initialEdges = [];
@@ -60,6 +114,7 @@ function Flow() {
   const [isStructureMode, setIsStructureMode] = useState(false); // [修正] 「構成」モードの状態管理
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 }); // [B-031] ラバーバンド用マウス座標
   const [activeToolbarMenu, setActiveToolbarMenu] = useState(null); // ツールバーのサブメニュー管理
+  const [ngContextMenu, setNgContextMenu] = useState(null); // ノードグラフ右クリックメニュー { x, y, nodeIds }
 
   // [D-027] ハイライト状態を安定させ、チャタリングを防ぐためのRef
   const lastTargetIdRef = React.useRef(null);
@@ -136,6 +191,10 @@ function Flow() {
   const edgesRef = React.useRef(edges);
   useEffect(() => { nodesRef.current = nodes; }, [nodes]);
   useEffect(() => { edgesRef.current = edges; }, [edges]);
+
+  // 直前の選択状態を保持（左クリック時にReactFlowが選択を変更する前の状態を参照するため）
+  const selectedNodeIdsRef = React.useRef([]);
+  const prevSelectedNodeIdsRef = React.useRef([]);
 
   const { 
     setCenter, 
@@ -319,10 +378,13 @@ function Flow() {
 
       const nodeId = `node-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
+      // 選択ノードのクラスを継承
+      const baseClass = baseNode.data?.nodeClass || '';
+
       let newNode = {
         id: nodeId,
         type: 'custom',
-        data: { label: '' },
+        data: { label: '', nodeClass: baseClass },
         position: { x: baseNode.position.x, y: baseNode.position.y },
         selected: true,
         width: 180,
@@ -337,7 +399,7 @@ function Flow() {
         const childNodes = currentNodes.filter((n) => childEdges.some((e) => e.target === n.id));
         const maxY = childNodes.reduce((max, n) => Math.max(max, n.position?.y || 0), baseNode.position.y - 70);
         
-        newNode.data.label = `Child of ${baseNode.data?.label || 'Node'}`;
+        newNode.data.label = 'New Node';
         newNode.position.x += 360;
         newNode.position.y = maxY + 70;
         edgesToAdd.push({ id: `edge-c-${Date.now()}`, source: baseNode.id, target: nodeId });
@@ -346,7 +408,7 @@ function Flow() {
         const parentEdges = currentEdges.filter(e => e.target === baseNode.id);
         const siblings = currentNodes.filter(n => currentEdges.some(e => parentEdges.some(pe => pe.source === e.source) && e.target === n.id));
         
-        newNode.data.label = `Sibling of ${baseNode.data?.label || 'Node'}`;
+        newNode.data.label = 'New Node';
         if (mode === 'sibling') {
           const maxY = siblings.reduce((max, n) => Math.max(max, n.position?.y || 0), baseNode.position.y);
           newNode.position.y = maxY + 70;
@@ -360,7 +422,7 @@ function Flow() {
         });
       }
       else if (mode === 'parent') {
-        newNode.data.label = `Parent of ${baseNode.data?.label || 'Node'}`;
+        newNode.data.label = 'New Node';
         newNode.position.x -= 360;
         
         const parentEdges = currentEdges.filter(e => e.target === baseNode.id);
@@ -482,6 +544,7 @@ function Flow() {
 
   // [B-005] キャンバス（背景）クリック時のハンドラ
   const onPaneClick = useCallback(() => {
+    setNgContextMenu(null);
     if (isAddNodeMode) {
       // [B-028] ノード追加モード時：背景クリックで一番下に追加
       onAddNode();
@@ -499,6 +562,71 @@ function Flow() {
       }
     }
   }, [isAddNodeMode, onAddNode, setIsAddNodeMode, isEdgeMode, edgeSourceId, yNodes]);
+
+  // ── ノードグラフ右クリックメニュー ──
+  const onNodeContextMenu = useCallback((event, node) => {
+    event.preventDefault();
+    const currentSelected = nodesRef.current.filter(n => n.selected);
+    const prevIds = prevSelectedNodeIdsRef.current;
+    rfDebug('onNodeContextMenu', { nodeId: node.id, currentSelected: currentSelected.map(n=>n.id), prevIds });
+    let nodeIds;
+    if (currentSelected.length >= 2) {
+      nodeIds = currentSelected.map(n => n.id);
+    } else if (prevIds.length >= 2 && prevIds.includes(node.id)) {
+      nodeIds = prevIds;
+    } else {
+      nodeIds = [node.id];
+    }
+    rfDebug('→ setNgContextMenu', { nodeIds });
+    setNgContextMenu({ x: event.clientX, y: event.clientY, nodeIds });
+  }, []);
+
+  // ── ペイン（背景）右クリック: 選択中ノードがあればメニュー表示 ──
+  const onPaneContextMenu = useCallback((event) => {
+    const selectedNodes = nodesRef.current.filter(n => n.selected);
+    rfDebug('onPaneContextMenu', { selectedCount: selectedNodes.length, ids: selectedNodes.map(n=>n.id) });
+    if (selectedNodes.length >= 1) {
+      event.preventDefault();
+      setNgContextMenu({ x: event.clientX, y: event.clientY, nodeIds: selectedNodes.map(n => n.id) });
+    }
+  }, []);
+
+  // ── 複数選択時の右クリック（ReactFlowが複数選択時にonNodeContextMenuではなくこちらを発火） ──
+  const onSelectionContextMenu = useCallback((event) => {
+    event.preventDefault();
+    const selectedNodes = nodesRef.current.filter(n => n.selected);
+    rfDebug('onSelectionContextMenu', { selectedCount: selectedNodes.length, ids: selectedNodes.map(n=>n.id) });
+    if (selectedNodes.length >= 1) {
+      setNgContextMenu({ x: event.clientX, y: event.clientY, nodeIds: selectedNodes.map(n => n.id) });
+    }
+  }, []);
+
+  // ── 選択変更追跡（左クリック前の選択状態を保持） ──
+  const onSelectionChangeForMenu = useCallback(({ nodes: selNodes }) => {
+    const prevIds = selectedNodeIdsRef.current;
+    const newIds = selNodes.map(n => n.id);
+    if (prevIds.length !== newIds.length || prevIds.some((id,i) => id !== newIds[i])) {
+      rfDebug('onSelectionChange', { prev: prevIds, now: newIds });
+    }
+    prevSelectedNodeIdsRef.current = prevIds;
+    selectedNodeIdsRef.current = newIds;
+  }, []);
+
+  // ── ノード左クリック: 複数選択中かつ通常モード時にもメニュー表示 ──
+  const onNodeClickWithMenu = useCallback((event, node) => {
+    const prev = prevSelectedNodeIdsRef.current;
+    rfDebug('onNodeClick', { nodeId: node.id, isAddNodeMode, isEdgeMode, prevSelected: prev });
+    if (isAddNodeMode || isEdgeMode) {
+      onNodeClick(event, node);
+      return;
+    }
+    if (prev.length >= 2 && prev.includes(node.id)) {
+      rfDebug('→ left-click menu (multi-select)', { nodeIds: prev });
+      setNgContextMenu({ x: event.clientX, y: event.clientY, nodeIds: prev });
+      return;
+    }
+    onNodeClick(event, node);
+  }, [isAddNodeMode, isEdgeMode, onNodeClick]);
 
   // ノードが追加された際に中央へ移動するエフェクト
   useEffect(() => {
@@ -808,27 +936,40 @@ function Flow() {
   // レイアウトデバッグ情報をクリップボードにコピーする関数
   const onCopyDebugInfo = useCallback(() => {
     const selectedNodes = nodesRef.current.filter(n => n.selected);
+    const selectedEdges = edgesRef.current.filter(e => e.selected);
     const isFiltering = selectedNodes.length > 0;
     const nodesToExport = isFiltering ? selectedNodes : nodesRef.current;
     const exportedNodeIds = new Set(nodesToExport.map(n => n.id));
 
     const debugInfo = {
+      timestamp: new Date().toISOString(),
+      project: projectName,
       isAutoLayout,
-      projectName,
+      selection: {
+        nodeCount: selectedNodes.length,
+        nodeIds: selectedNodes.map(n => n.id),
+        edgeCount: selectedEdges.length,
+      },
+      totalNodes: nodesRef.current.length,
+      totalEdges: edgesRef.current.length,
       nodes: nodesToExport.map(n => ({ 
         id: n.id, 
         label: n.data?.label,
         nodeClass: n.data?.nodeClass,
+        selected: n.selected ?? false,
         x: Math.round(n.position.x), 
         y: Math.round(n.position.y) 
       })),
       edges: edgesRef.current
         .filter(e => exportedNodeIds.has(e.source) && exportedNodeIds.has(e.target))
-        .map(e => ({ source: e.source, target: e.target }))
+        .map(e => ({ source: e.source, target: e.target, selected: e.selected ?? false })),
+      recentEvents: _rfDebugLog.slice(-20),
     };
     const text = JSON.stringify(debugInfo, null, 2);
     navigator.clipboard.writeText(text);
-    alert(isFiltering ? '選択中の要素のデバッグ情報をコピーしました。' : '全要素のデバッグ情報をコピーしました。');
+    alert(isFiltering
+      ? `選択中の要素(${selectedNodes.length}ノード)のデバッグ情報をコピーしました。\n直近${Math.min(_rfDebugLog.length,20)}件のイベント履歴を含みます。`
+      : `全要素のデバッグ情報をコピーしました。\n直近${Math.min(_rfDebugLog.length,20)}件のイベント履歴を含みます。`);
   }, [isAutoLayout, projectName]);
 
   // キーボードショートカットの制御
@@ -944,7 +1085,12 @@ function Flow() {
       
       const nodesArray = Array.from(yNodes.values());
       const edgesArray = Array.from(yEdges.values());
-      if (yProjectMeta.get('name')) setProjectName(yProjectMeta.get('name'));
+      const yjsName = yProjectMeta.get('name');
+      if (yjsName) {
+        setProjectName(yjsName);
+        // Yjs→localStorage同期 (MCP等の外部からの名前変更を反映)
+        PS.renameProject(PS.getActiveProjectId(), yjsName);
+      }
 
       // [B-016] フォーカス対象（到達可能セット）の算出
       const focusSet = (focusMode === 'none') ? null : (() => {
@@ -1082,7 +1228,7 @@ function Flow() {
   }, [edges, edgeSourceId, hoveredNodeId, mousePos]);
 
   return (
-    <div style={{ width: '100%', height: '100vh', position: 'relative', overflow: 'hidden' }}>
+    <div style={{ width: '100%', height: '100%', position: 'relative', overflow: 'hidden' }}>
       <style>{`
         .react-flow__edge.selected .react-flow__edge-path {
           stroke: #ff0000 !important;
@@ -1243,7 +1389,11 @@ function Flow() {
         nodes={nodes}
         edges={displayEdges}
         onNodesChange={onNodesChange}
-        onNodeClick={onNodeClick} // [B-005] ノードクリックハンドラを追加
+        onNodeClick={onNodeClickWithMenu}
+        onNodeContextMenu={onNodeContextMenu}
+        onPaneContextMenu={onPaneContextMenu}
+        onSelectionContextMenu={onSelectionContextMenu}
+        onSelectionChange={onSelectionChangeForMenu}
         onPaneClick={onPaneClick} // [B-005] キャンバスクリックハンドラを追加
         onEdgesChange={onEdgesChange}
         onNodeDragStart={onNodeDragStart}
@@ -1269,53 +1419,6 @@ function Flow() {
       >
         <Background />
         <Controls />
-        <Panel position="top-left">
-          <div 
-            style={{ 
-              background: '#fff', 
-              padding: '8px 12px', 
-              borderRadius: '4px', 
-              border: '2px solid #1a192b',
-              boxShadow: '0 2px 5px rgba(0,0,0,0.1)',
-              cursor: isEditingProjectName ? 'default' : 'pointer'
-            }}
-            onClick={() => !isEditingProjectName && setIsEditingProjectName(true)}
-          >
-            <span style={{ fontSize: '10px', color: '#666', display: 'block', lineHeight: 1 }}>PROJECT</span>
-            {isEditingProjectName ? (
-              <input
-                type="text"
-                value={projectName}
-                autoFocus
-                onChange={(e) => {
-                  const newName = e.target.value;
-                  setProjectName(newName);
-                  yProjectMeta.set('name', newName);
-                }}
-                onBlur={() => setIsEditingProjectName(false)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') setIsEditingProjectName(false);
-                  if (e.key === 'Escape') setIsEditingProjectName(false);
-                  e.stopPropagation();
-                }}
-                onClick={(e) => e.stopPropagation()}
-                style={{
-                  fontSize: '14px',
-                  fontWeight: 'bold',
-                  border: 'none',
-                  outline: 'none',
-                  width: '100%',
-                  padding: 0,
-                  margin: 0,
-                  background: 'transparent',
-                  fontFamily: 'inherit'
-                }}
-              />
-            ) : (
-              <strong style={{ fontSize: '14px' }}>{projectName}</strong>
-            )}
-          </div>
-        </Panel>
         </ReactFlow>
 
         {/* [D-039] データ駆動型ツールバー構成 - フローティングUIのためReactFlowの外に配置 */}
@@ -1495,7 +1598,6 @@ function Flow() {
                   <Component
                     key={item.id}
                     className={`btn-icon ${item.active ? 'active' : ''}`}
-                    active={item.active}
                     tooltip={item.tooltip}
                     data-tooltip={item.tooltip}
                     onClick={item.onClick}
@@ -1547,14 +1649,589 @@ function Flow() {
           );
         })()}
       </div>
+
+      {/* ── ノードグラフ右クリックメニュー ── */}
+      {ngContextMenu && (
+        <NodeGraphContextMenu
+          x={ngContextMenu.x}
+          y={ngContextMenu.y}
+          nodeIds={ngContextMenu.nodeIds}
+          ydoc={ydoc}
+          onClose={() => setNgContextMenu(null)}
+        />
+      )}
     </div>
   );
 }
 
-export default function App() {
+/* ══════════════════════════════════════════════
+   ノードグラフ右クリックメニュー
+══════════════════════════════════════════════ */
+function NodeGraphContextMenu({ x, y, nodeIds, ydoc, onClose }) {
+  const ref = useRef(null);
+  const [pos, setPos] = useState({ left: x, top: y });
+  const [showSub, setShowSub] = useState(false);
+  const [diagrams, setDiagrams] = useState([]);
+
+  useEffect(() => {
+    const handleDown = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) onClose();
+    };
+    document.addEventListener('mousedown', handleDown);
+    return () => document.removeEventListener('mousedown', handleDown);
+  }, [onClose]);
+
+  // 画面端で見切れないよう調整
+  useEffect(() => {
+    if (!ref.current) return;
+    const rect = ref.current.getBoundingClientRect();
+    let left = x, top = y;
+    if (x + rect.width > window.innerWidth) left = window.innerWidth - rect.width - 8;
+    if (y + rect.height > window.innerHeight) top = window.innerHeight - rect.height - 8;
+    if (left < 0) left = 8;
+    if (top < 0) top = 8;
+    setPos({ left, top });
+  }, [x, y]);
+
+  // 既存ブロック図一覧を取得
+  useEffect(() => {
+    const yBdMeta = ydoc.getMap('bdDiagramsMeta');
+    setDiagrams(Array.from(yBdMeta.values()));
+  }, [ydoc]);
+
+  const addNodesToLayout = (diagramId) => {
+    const mapName = diagramId === 'default' ? 'bdLayout' : `bdLayout_${diagramId}`;
+    const yBdLayout = ydoc.getMap(mapName);
+    ydoc.transact(() => {
+      nodeIds.forEach((nodeId, idx) => {
+        if (yBdLayout.has(nodeId)) return;
+        const existing = Array.from(yBdLayout.keys()).length;
+        const cols = 5;
+        const total = existing + idx;
+        yBdLayout.set(nodeId, {
+          position: { x: (total % cols) * 220 + 40, y: Math.floor(total / cols) * 150 + 40 },
+          shape: 'rect', fillColor: '#ffffff',
+          borderColor: '#888888', borderWidth: 1.5, textColor: '#111827',
+          fontSize: 13, width: 160, height: 60,
+        });
+      });
+    }, 'local');
+  };
+
+  const handleNewDiagram = () => {
+    const name = `ブロック図 (${nodeIds.length}ノード)`;
+    window.dispatchEvent(new CustomEvent('ngCreateDiagramWithNodes', {
+      detail: { name, nodeIds }
+    }));
+    onClose();
+  };
+
+  const handleAddToExisting = (diagramId, diagramName) => {
+    addNodesToLayout(diagramId);
+    // 図のタブを開く
+    window.dispatchEvent(new CustomEvent('ngOpenDiagramTab', {
+      detail: { diagramId, name: diagramName }
+    }));
+    onClose();
+  };
+
+  const S = {
+    menu: {
+      position: 'fixed', left: pos.left, top: pos.top, zIndex: 9999,
+      background: '#ffffff', border: '1px solid #e5e7eb', borderRadius: 8,
+      boxShadow: '0 8px 24px rgba(0,0,0,0.16)', minWidth: 210,
+      fontFamily: 'system-ui, -apple-system, sans-serif', fontSize: 13,
+      overflow: 'visible', padding: '4px 0',
+    },
+    item: {
+      display: 'flex', alignItems: 'center', gap: 8,
+      padding: '8px 14px', cursor: 'pointer', border: 'none',
+      background: 'none', width: '100%', textAlign: 'left',
+      color: '#374151', fontSize: 13, transition: 'background 0.08s',
+    },
+    sub: {
+      position: 'absolute', left: '100%', top: 0,
+      background: '#ffffff', border: '1px solid #e5e7eb', borderRadius: 8,
+      boxShadow: '0 8px 24px rgba(0,0,0,0.16)', minWidth: 180,
+      padding: '4px 0', maxHeight: 300, overflowY: 'auto',
+    },
+  };
+
   return (
-    <ReactFlowProvider>
-      <Flow />
-    </ReactFlowProvider>
+    <div ref={ref} style={S.menu}>
+      <div style={{ padding: '4px 14px 6px', fontSize: 11, color: '#9ca3af', fontWeight: 600 }}>
+        {nodeIds.length} ノード選択中
+      </div>
+      <button
+        style={S.item}
+        onClick={handleNewDiagram}
+        onMouseEnter={e => { e.currentTarget.style.background = '#f3f4f6'; setShowSub(false); }}
+        onMouseLeave={e => { e.currentTarget.style.background = 'none'; }}
+      >
+        <span>✚</span> ブロック図を新規作成
+      </button>
+      {diagrams.length > 0 && (
+        <div style={{ position: 'relative' }}>
+          <button
+            style={{ ...S.item, justifyContent: 'space-between' }}
+            onMouseEnter={e => { e.currentTarget.style.background = '#f3f4f6'; setShowSub(true); }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'none'; }}
+          >
+            <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span>📋</span> 既存ブロック図に追加
+            </span>
+            <span style={{ opacity: 0.4 }}>▸</span>
+          </button>
+          {showSub && (
+            <div
+              style={S.sub}
+              onMouseEnter={() => setShowSub(true)}
+              onMouseLeave={() => setShowSub(false)}
+            >
+              {diagrams.map(d => (
+                <button
+                  key={d.id}
+                  style={S.item}
+                  onClick={() => handleAddToExisting(d.id, d.name)}
+                  onMouseEnter={e => { e.currentTarget.style.background = '#f3f4f6'; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = 'none'; }}
+                >
+                  {d.name}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════
+   グローバルコマンドバー (Linear/Figma 風)
+══════════════════════════════════════════════ */
+function GlobalBar({
+  setShowProjectBrowser, setShowDiagramBrowser, onAddTab,
+}) {
+  const [showViewMenu, setShowViewMenu] = useState(false);
+  const viewMenuRef = useRef(null);
+
+  useEffect(() => {
+    if (!showViewMenu) return;
+    const handler = (e) => {
+      if (viewMenuRef.current && !viewMenuRef.current.contains(e.target)) setShowViewMenu(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showViewMenu]);
+
+  const S = {
+    bar: {
+      background: 'linear-gradient(180deg, #1a1a2e 0%, #16162a 100%)',
+      display: 'flex', alignItems: 'center',
+      padding: '0 12px', height: 32, gap: 2, flexShrink: 0,
+      borderBottom: '1px solid rgba(255,255,255,0.06)',
+      fontFamily: 'system-ui, -apple-system, sans-serif',
+    },
+    btn: {
+      background: 'transparent', border: 'none', color: '#a0a0b8',
+      borderRadius: 6, padding: '4px 10px', fontSize: 11.5, cursor: 'pointer',
+      display: 'flex', alignItems: 'center', gap: 5,
+      transition: 'background 0.12s, color 0.12s',
+      fontWeight: 500, whiteSpace: 'nowrap',
+    },
+    btnHover: { background: 'rgba(255,255,255,0.07)', color: '#e0e0f0' },
+    sep: { width: 1, height: 16, background: 'rgba(255,255,255,0.08)', margin: '0 4px', flexShrink: 0 },
+    accent: { color: '#7c8aff' },
+    menu: {
+      position: 'absolute', top: 'calc(100% + 4px)', left: 0,
+      background: '#252533', border: '1px solid rgba(255,255,255,0.1)',
+      borderRadius: 8, boxShadow: '0 12px 40px rgba(0,0,0,0.5)',
+      zIndex: 9999, minWidth: 220, padding: '4px 0',
+      animation: 'tabMenuFadeIn 0.12s ease-out',
+    },
+    menuItem: {
+      display: 'flex', alignItems: 'center', gap: 10,
+      padding: '8px 14px', cursor: 'pointer', color: '#c8c8d8',
+      fontSize: 12, transition: 'background 0.08s, color 0.08s',
+    },
+    menuIcon: { width: 16, height: 16, opacity: 0.7, flexShrink: 0 },
+  };
+
+  return (
+    <div style={S.bar}>
+      {/* プロジェクトブラウザボタン */}
+      <button
+        style={{ ...S.btn, fontWeight: 600, color: '#e0e0f0' }}
+        onClick={setShowProjectBrowser}
+        onMouseEnter={e => Object.assign(e.currentTarget.style, S.btnHover)}
+        onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#e0e0f0'; }}
+        title="プロジェクト切替"
+      >
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style={{ opacity: 0.7 }}>
+          <path d="M1.5 1A1.5 1.5 0 000 2.5v11A1.5 1.5 0 001.5 15h13a1.5 1.5 0 001.5-1.5v-9A1.5 1.5 0 0014.5 3H7.71l-1.6-1.6A1.5 1.5 0 005.05 1H1.5z"/>
+        </svg>
+        プロジェクト
+      </button>
+
+      <div style={S.sep} />
+
+      {/* 図を開く */}
+      <button
+        style={S.btn}
+        onClick={setShowDiagramBrowser}
+        onMouseEnter={e => Object.assign(e.currentTarget.style, S.btnHover)}
+        onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#a0a0b8'; }}
+        title="ブロック図を開く"
+      >
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style={{ opacity: 0.6 }}>
+          <path d="M2 2h5v5H2V2zm7 0h5v5H9V2zM2 9h5v5H2V9zm7 0h5v5H9V9z"/>
+        </svg>
+        図を開く
+      </button>
+
+      {/* 図を追加 */}
+      <button
+        style={{ ...S.btn, ...S.accent }}
+        onClick={() => onAddTab('block-diagram')}
+        onMouseEnter={e => Object.assign(e.currentTarget.style, { background: 'rgba(124,138,255,0.12)', color: '#a0b4ff' })}
+        onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#7c8aff'; }}
+        title="新しいブロック図を作成"
+      >
+        <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor">
+          <path d="M8 1a1 1 0 011 1v5h5a1 1 0 110 2H9v5a1 1 0 11-2 0V9H2a1 1 0 110-2h5V2a1 1 0 011-1z"/>
+        </svg>
+        図を追加
+      </button>
+
+      <div style={S.sep} />
+
+      {/* ビュー追加 */}
+      <div style={{ position: 'relative' }} ref={viewMenuRef}>
+        <button
+          style={S.btn}
+          onClick={() => setShowViewMenu(v => !v)}
+          onMouseEnter={e => Object.assign(e.currentTarget.style, S.btnHover)}
+          onMouseLeave={e => { if (!showViewMenu) { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#a0a0b8'; } }}
+          title="ビューを追加"
+        >
+          <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" style={{ opacity: 0.6 }}>
+            <path d="M14 1H2a1 1 0 00-1 1v12a1 1 0 001 1h12a1 1 0 001-1V2a1 1 0 00-1-1zM2 0a2 2 0 00-2 2v12a2 2 0 002 2h12a2 2 0 002-2V2a2 2 0 00-2-2H2z"/>
+            <path d="M8 4a.5.5 0 01.5.5v3h3a.5.5 0 010 1h-3v3a.5.5 0 01-1 0v-3h-3a.5.5 0 010-1h3v-3A.5.5 0 018 4z"/>
+          </svg>
+          ビュー追加
+          <svg width="8" height="8" viewBox="0 0 16 16" fill="currentColor" style={{ opacity: 0.5 }}>
+            <path d="M4 6l4 4 4-4H4z"/>
+          </svg>
+        </button>
+
+        {showViewMenu && (
+          <div style={S.menu}>
+            {VIEW_TYPES.map(vt => (
+              <div
+                key={vt.type}
+                style={S.menuItem}
+                onClick={() => { onAddTab(vt.type); setShowViewMenu(false); }}
+                onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; e.currentTarget.style.color = '#fff'; }}
+                onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#c8c8d8'; }}
+              >
+                <span style={S.menuIcon}>{vt.icon}</span>
+                <span>{vt.title}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// タブID生成カウンター
+let _tabIdCounter = 2;
+
+export default function App() {
+  // ── プロジェクト状態 ──
+  const [activeProjectId, setActiveProjectId] = useState(() => PS.getActiveProjectId());
+  const [projectKey, setProjectKey] = useState(0);
+  const [appProjectName, setAppProjectName] = useState(() => {
+    const p = PS.getProjects().find(pr => pr.id === PS.getActiveProjectId());
+    return p?.name || 'プロジェクト';
+  });
+
+  // ── タブ状態（localStorage から復元） ──
+  const [tabs, setTabs] = useState(() => {
+    const saved = PS.getTabState(PS.getActiveProjectId());
+    return saved?.tabs || [{ id: 'tab-1', type: 'node-graph', title: 'ノードグラフ' }];
+  });
+  const [activeTabId, setActiveTabId] = useState(() => {
+    const saved = PS.getTabState(PS.getActiveProjectId());
+    return saved?.activeTabId || 'tab-1';
+  });
+
+  // ── ダイアログ表示状態 ──
+  const [showProjectBrowser, setShowProjectBrowser] = useState(false);
+  const [showDiagramBrowser, setShowDiagramBrowser] = useState(false);
+
+  // ── Yjs projectMeta の名前変更を監視 ──
+  useEffect(() => {
+    const ypm = ydoc.getMap('projectMeta');
+    const handler = () => {
+      const n = ypm.get('name');
+      if (n) setAppProjectName(n);
+    };
+    ypm.observe(handler);
+    return () => ypm.unobserve(handler);
+  }, [projectKey]);
+
+  // ── タブを localStorage に自動保存 ──
+  useEffect(() => {
+    PS.saveTabs(activeProjectId, tabs, activeTabId);
+  }, [tabs, activeTabId, activeProjectId]);
+
+  // ── ブロック図を新規作成してタブを開く ──
+  const createAndOpenDiagram = useCallback((name = '新しいブロック図') => {
+    const diagramId = 'bd_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 4);
+    const yBdMeta = ydoc.getMap('bdDiagramsMeta');
+    ydoc.transact(() => {
+      yBdMeta.set(diagramId, { id: diagramId, name, createdAt: new Date().toISOString() });
+    }, 'local');
+    const id = `tab-${_tabIdCounter++}`;
+    setTabs(prev => [...prev, { id, type: 'block-diagram', title: name, diagramId }]);
+    setActiveTabId(id);
+    setShowDiagramBrowser(false);
+    return diagramId;
+  }, []);
+
+  // ── 既存ブロック図を開く（タブが既にあればフォーカス） ──
+  const openDiagram = useCallback((diagramId, name) => {
+    const existing = tabs.find(t => t.type === 'block-diagram' && t.diagramId === diagramId);
+    if (existing) { setActiveTabId(existing.id); setShowDiagramBrowser(false); return; }
+    const id = `tab-${_tabIdCounter++}`;
+    setTabs(prev => [...prev, { id, type: 'block-diagram', title: name, diagramId }]);
+    setActiveTabId(id);
+    setShowDiagramBrowser(false);
+  }, [tabs]);
+
+  // ── ノードグラフ右クリックからのカスタムイベントをハンドリング ──
+  useEffect(() => {
+    const handleCreate = (e) => {
+      const { name, nodeIds } = e.detail;
+      const diagramId = createAndOpenDiagram(name);
+      // 作成した図にノードを追加
+      const mapName = `bdLayout_${diagramId}`;
+      const yBdLayout = ydoc.getMap(mapName);
+      ydoc.transact(() => {
+        nodeIds.forEach((nodeId, idx) => {
+          const cols = 5;
+          yBdLayout.set(nodeId, {
+            position: { x: (idx % cols) * 220 + 40, y: Math.floor(idx / cols) * 150 + 40 },
+            shape: 'rect', fillColor: '#ffffff',
+            borderColor: '#888888', borderWidth: 1.5, textColor: '#111827',
+            fontSize: 13, width: 160, height: 60,
+          });
+        });
+      }, 'local');
+    };
+    const handleOpen = (e) => {
+      const { diagramId, name } = e.detail;
+      openDiagram(diagramId, name);
+    };
+    window.addEventListener('ngCreateDiagramWithNodes', handleCreate);
+    window.addEventListener('ngOpenDiagramTab', handleOpen);
+    return () => {
+      window.removeEventListener('ngCreateDiagramWithNodes', handleCreate);
+      window.removeEventListener('ngOpenDiagramTab', handleOpen);
+    };
+  }, [createAndOpenDiagram, openDiagram]);
+
+  // ── プロジェクト切り替え ──
+  const switchProject = useCallback((projectId) => {
+    PS.saveTabs(activeProjectId, tabs, activeTabId);
+    ydoc = initYjsForProject(projectId);
+    PS.setActiveProjectId(projectId);
+    const saved = PS.getTabState(projectId);
+    const newTabs = saved?.tabs || [{ id: 'tab-1', type: 'node-graph', title: 'ノードグラフ' }];
+    const newActiveTabId = saved?.activeTabId || 'tab-1';
+    setActiveProjectId(projectId);
+    setTabs(newTabs);
+    setActiveTabId(newActiveTabId);
+    setShowProjectBrowser(false);
+    // 切り替え先のプロジェクト名を反映
+    const proj = PS.getProjects().find(p => p.id === projectId);
+    setAppProjectName(proj?.name || 'プロジェクト');
+    setProjectKey(k => k + 1);
+  }, [activeProjectId, tabs, activeTabId]);
+
+  // ── ビュー追加（ブロック図は createAndOpenDiagram で処理） ──
+  const addTab = useCallback((type) => {
+    if (type === 'block-diagram') { createAndOpenDiagram(); return; }
+    const viewDef = VIEW_TYPES.find((vt) => vt.type === type);
+    if (viewDef?.singleton) {
+      const existing = tabs.find((t) => t.type === type);
+      if (existing) { setActiveTabId(existing.id); return; }
+    }
+    const id = `tab-${_tabIdCounter++}`;
+    const newTab = { id, type, title: viewDef?.title || type };
+    setTabs((prev) => [...prev, newTab]);
+    setActiveTabId(id);
+  }, [tabs, createAndOpenDiagram]);
+
+  // ── タブを閉じる ──
+  const closeTab = useCallback((tabId) => {
+    setTabs((prev) => {
+      if (prev.length <= 1) return prev;
+      const idx = prev.findIndex((t) => t.id === tabId);
+      const next = prev.filter((t) => t.id !== tabId);
+      setActiveTabId((cur) => {
+        if (cur !== tabId) return cur;
+        return (next[idx] ?? next[idx - 1])?.id ?? next[0]?.id;
+      });
+      return next;
+    });
+  }, []);
+
+  // ── タブ並び替え ──
+  const reorderTab = useCallback((dragId, dropId, side) => {
+    setTabs(prev => {
+      const dragged = prev.find(t => t.id === dragId);
+      if (!dragged) return prev;
+      const without = prev.filter(t => t.id !== dragId);
+      const dropIdx = without.findIndex(t => t.id === dropId);
+      if (dropIdx < 0) return prev;
+      const insertIdx = side === 'right' ? dropIdx + 1 : dropIdx;
+      without.splice(insertIdx, 0, dragged);
+      return without;
+    });
+  }, []);
+
+  // ── これ以外を閉じる ──
+  const closeOtherTabs = useCallback((keepTabId) => {
+    setTabs(prev => prev.filter(t => t.id === keepTabId));
+    setActiveTabId(keepTabId);
+  }, []);
+
+  // ── すべて閉じる（ノードグラフを残す） ──
+  const closeAllTabs = useCallback(() => {
+    const ngTab = tabs.find(t => t.type === 'node-graph');
+    if (ngTab) {
+      setTabs([ngTab]);
+      setActiveTabId(ngTab.id);
+    } else {
+      const fallback = { id: 'tab-1', type: 'node-graph', title: 'ノードグラフ' };
+      setTabs([fallback]);
+      setActiveTabId(fallback.id);
+    }
+  }, [tabs]);
+
+  // ── タブのタイトル変更 ──
+  const renameTab = useCallback((tabId, newName) => {
+    setTabs(prev => prev.map(t => {
+      if (t.id !== tabId) return t;
+      // ブロック図タブ → bdDiagramsMeta も更新
+      if (t.type === 'block-diagram' && t.diagramId) {
+        const yBdMeta = ydoc.getMap('bdDiagramsMeta');
+        const meta = yBdMeta.get(t.diagramId);
+        if (meta) ydoc.transact(() => yBdMeta.set(t.diagramId, { ...meta, name: newName }), 'local');
+      }
+      // ノードグラフ → Yjs projectMeta も更新
+      if (t.type === 'node-graph') {
+        const yProjectMeta = ydoc.getMap('projectMeta');
+        yProjectMeta.set('name', newName);
+      }
+      return { ...t, title: newName };
+    }));
+  }, []);
+
+  // ── プロジェクト名変更 ──
+  const commitProjectName = useCallback((newName) => {
+    const name = (typeof newName === 'string' ? newName : '').trim();
+    if (name) {
+      PS.renameProject(activeProjectId, name);
+      const ypm = ydoc.getMap('projectMeta');
+      ypm.set('name', name);
+      setAppProjectName(name);
+    }
+  }, [activeProjectId]);
+
+  const currentProjectName = appProjectName;
+  const openBdIds = tabs.filter(t => t.type === 'block-diagram').map(t => t.diagramId).filter(Boolean);
+
+  // ── 一覧表から図を開いてノードにフォーカス ──
+  const [focusNodeId, setFocusNodeId] = useState(null);
+  const handleOpenDiagramFromTable = useCallback((bdTabId, nodeId) => {
+    const tab = tabs.find(t => t.id === bdTabId);
+    if (tab) {
+      setActiveTabId(bdTabId);
+      setFocusNodeId(nodeId);
+    }
+  }, [tabs]);
+
+  return (
+    <div key={projectKey} style={{ width: '100%', height: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      {/* ── グローバルコマンドバー ── */}
+      <GlobalBar
+        setShowProjectBrowser={() => setShowProjectBrowser(true)}
+        setShowDiagramBrowser={() => setShowDiagramBrowser(true)}
+        onAddTab={addTab}
+      />
+
+      {/* VS Code 風タブバー */}
+      <TabBar
+        tabs={tabs}
+        activeTabId={activeTabId}
+        onTabChange={setActiveTabId}
+        onTabClose={closeTab}
+        onTabRename={renameTab}
+        onReorder={reorderTab}
+        onCloseOthers={closeOtherTabs}
+        onCloseAll={closeAllTabs}
+        projectName={currentProjectName}
+        onProjectNameChange={commitProjectName}
+      />
+
+      {/* ビューコンテナ */}
+      <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+        {(() => {
+          const tab = tabs.find(t => t.id === activeTabId);
+          if (!tab) return null;
+          return (
+            <div key={tab.id} style={{ position: 'absolute', inset: 0 }}>
+              {tab.type === 'node-graph' && (
+                <ReactFlowProvider>
+                  <Flow />
+                </ReactFlowProvider>
+              )}
+              {tab.type === 'table' && <TableView ydoc={ydoc} tabs={tabs} onOpenDiagram={handleOpenDiagramFromTable} />}
+              {tab.type === 'block-diagram' && (
+                <BlockDiagramView ydoc={ydoc} diagramId={tab.diagramId || 'default'} focusNodeId={tab.id === activeTabId ? focusNodeId : null} onFocusDone={() => setFocusNodeId(null)} />
+              )}
+              {tab.type === 'function-flow' && (
+                <PlaceholderView type="function-flow" title="Function Flow Diagram" />
+              )}
+            </div>
+          );
+        })()}
+      </div>
+
+      {/* ── プロジェクトブラウザ ── */}
+      {showProjectBrowser && (
+        <ProjectBrowserDialog
+          activeProjectId={activeProjectId}
+          onSwitch={switchProject}
+          onClose={() => setShowProjectBrowser(false)}
+        />
+      )}
+
+      {/* ── ブロック図ブラウザ ── */}
+      {showDiagramBrowser && (
+        <DiagramBrowserDialog
+          ydoc={ydoc}
+          openTabDiagramIds={openBdIds}
+          onOpen={openDiagram}
+          onNew={createAndOpenDiagram}
+          onClose={() => setShowDiagramBrowser(false)}
+        />
+      )}
+    </div>
   );
 }
