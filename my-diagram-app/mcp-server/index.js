@@ -3,9 +3,13 @@ const { SSEServerTransport } = require("@modelcontextprotocol/sdk/server/sse.js"
 const { CallToolRequestSchema, ListToolsRequestSchema } = require("@modelcontextprotocol/sdk/types.js");
 const express = require("express");
 const cors = require("cors");
+const http = require('http');
 const Y = require('yjs');
-const { WebsocketProvider } = require('y-websocket');
-const ws = require('ws');
+const { setupWSConnection } = require('y-websocket/bin/utils');
+const { WebSocketServer } = require('ws');
+const fs = require('fs');
+const path = require('path');
+const { randomUUID } = require('crypto');
 
 // ============================================================
 // Yjs Connection Manager (D-058)
@@ -13,16 +17,9 @@ const ws = require('ws');
 // ============================================================
 let _currentProjectId = null;
 let _ydoc = null;
-let _wsProvider = null;
-
 let _currentRoomName = null;
 
 function connectToProject(projectId, roomName) {
-  // 既存接続を破棄
-  if (_wsProvider) {
-    _wsProvider.destroy();
-    _wsProvider = null;
-  }
   if (_ydoc) {
     _ydoc.destroy();
     _ydoc = null;
@@ -32,32 +29,13 @@ function connectToProject(projectId, roomName) {
     _currentProjectId = null;
     _currentRoomName = null;
     console.log('[Yjs] Disconnected (no project)');
-    return Promise.resolve();
+    return;
   }
 
-  const actualRoom = roomName || `mda_${projectId}`;
+  _currentRoomName = roomName || `mda_${projectId}`;
   _ydoc = new Y.Doc();
-  _wsProvider = new WebsocketProvider('ws://localhost:1234', actualRoom, _ydoc, { WebSocketPolyfill: ws });
   _currentProjectId = projectId;
-  _currentRoomName = actualRoom;
-  console.log(`[Yjs] Connected to project: ${projectId} (room: ${actualRoom})`);
-
-  // WebSocket同期完了を待つ (最大3秒)
-  return new Promise((resolve) => {
-    if (_wsProvider.synced) {
-      console.log('[Yjs] Already synced');
-      return resolve();
-    }
-    const timer = setTimeout(() => {
-      console.log('[Yjs] Sync timeout (3s) - proceeding anyway');
-      resolve();
-    }, 3000);
-    _wsProvider.once('sync', () => {
-      clearTimeout(timer);
-      console.log('[Yjs] Sync complete');
-      resolve();
-    });
-  });
+  console.log(`[Yjs] Y.Doc for room '${_currentRoomName}' is ready. Waiting for client connections.`);
 }
 
 function ensureConnected() {
@@ -93,62 +71,100 @@ if (defaultProjectId) {
 }
 
 // ============================================================
-// Project Registry (プロジェクト一覧の自動検出)
-// フロントエンドが mda__registry ルームに書き込んだ
-// プロジェクト一覧を読み取る
+// Project Registry API & WebSocket (D-058)
+// プロジェクト一覧の管理とリアルタイム同期
 // ============================================================
-let _registryDoc = null;
-let _registryProvider = null;
-let _registrySynced = false;
+const DB_PATH = path.join(__dirname, 'projects.json');
 
-function initRegistry() {
-  _registryDoc = new Y.Doc();
-  _registryProvider = new WebsocketProvider(
-    'ws://localhost:1234', 'mda__registry', _registryDoc, { WebSocketPolyfill: ws }
-  );
-  _registryProvider.on('sync', (synced) => {
-    if (synced) {
-      _registrySynced = true;
-      const yProjects = _registryDoc.getMap('projects');
-      console.log(`[Registry] Synced - ${yProjects.size} project(s) found`);
+function readProjects() {
+  if (!fs.existsSync(DB_PATH)) return [];
+  try {
+    return JSON.parse(fs.readFileSync(DB_PATH, 'utf-8'));
+  } catch (e) {
+    console.error('[Registry] Failed to read or parse projects.json', e);
+    return [];
+  }
+}
+
+function writeProjects(projects) {
+  fs.writeFileSync(DB_PATH, JSON.stringify(projects, null, 2));
+}
+
+function setupRegistryEndpoints(app, registryWss) {
+  // 接続している全クライアントにブロードキャストする関数
+  const broadcastProjectUpdate = () => {
+    const projects = readProjects();
+    // WebSocketServer.clients は Node.js の ws ライブラリのプロパティ
+    if (registryWss && registryWss.clients) {
+      const message = JSON.stringify({ type: 'projects_updated', payload: projects });
+      for (const client of registryWss.clients) {
+        if (client.readyState === client.OPEN) {
+          client.send(message);
+        }
+      }
+    }
+  };
+
+  app.get('/api/projects', (req, res) => res.json(readProjects()));
+
+  app.post('/api/projects', (req, res) => {
+    const projects = readProjects();
+    const newProject = {
+      id: `proj_${randomUUID().slice(0, 8)}`,
+      name: req.body.name || '新規プロジェクト',
+      createdAt: new Date().toISOString(),
+      lastModified: new Date().toISOString(),
+    };
+    projects.push(newProject);
+    writeProjects(projects);
+    broadcastProjectUpdate();
+    res.status(201).json(newProject);
+  });
+
+  app.delete('/api/projects/:id', (req, res) => {
+    let projects = readProjects();
+    projects = projects.filter(p => p.id !== req.params.id);
+    writeProjects(projects);
+    broadcastProjectUpdate();
+    res.status(204).send();
+  });
+
+  app.put('/api/projects/:id', (req, res) => {
+    const projects = readProjects();
+    const project = projects.find(p => p.id === req.params.id);
+    if (project) {
+      project.name = req.body.name;
+      project.lastModified = new Date().toISOString();
+      writeProjects(projects);
+      broadcastProjectUpdate();
+      res.json(project);
+    } else {
+      res.status(404).send('Project not found');
     }
   });
 }
-
-function getRegistryProjects() {
-  if (!_registryDoc || !_registrySynced) return [];
-  const yProjects = _registryDoc.getMap('projects');
-  const projects = [];
-  for (const [id, data] of yProjects.entries()) {
-    projects.push({ id, ...data });
-  }
-  return projects;
-}
-
-function resolveRoomName(projectId) {
-  const projects = getRegistryProjects();
-  const proj = projects.find(p => p.id === projectId);
-  return proj?.roomName || `mda_${projectId}`;
-}
-
-initRegistry();
 
 // ============================================================
 // MCP Server
 // ============================================================
 async function main() {
   const app = express();
-  app.use(cors());
+  // CORS設定を明示的に行う
+  app.use(cors({
+    origin: 'http://localhost:5173', // フロントエンドのオリジンを許可
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type'],
+  }));
 
-  // 【重要】express.json() は削除またはコメントアウトしてください。
-  // MCP SDKの SSEServerTransport が内部でリクエストストリームを直接読み取るため、
-  // ここでパースしてしまうと通信が失敗します。
+  // APIリクエスト用に express.json() を使用
+  app.use(express.json());
 
-  const activeTransports = new Map();
+  const setupMcpServer = (app) => {
+    const activeTransports = new Map();
 
-  app.get("/sse", async (req, res) => {
-    console.log(`[SSE] New connection request from ${req.ip}`);
-    const server = new Server(
+    app.get("/sse", async (req, res) => {
+      console.log(`[SSE] New connection request from ${req.ip}`);
+      const server = new Server(
       { name: "diagram-app-mcp", version: "2.0.0" },
       { capabilities: { tools: {} } }
     );
@@ -158,13 +174,8 @@ async function main() {
       tools: [
         // --- プロジェクト管理 (D-058) ---
         {
-          name: "list_projects",
-          description: "フロントエンドに登録されたプロジェクト一覧を取得します。各プロジェクトのIDとroomNameを含みます。switch_projectの前に呼んでください。",
-          inputSchema: { type: "object", properties: {} }
-        },
-        {
           name: "switch_project",
-          description: "Yjsルームを指定プロジェクトに切り替えます。ルーム名はレジストリから自動解決されます。roomNameを明示的に指定することもできます。",
+          description: "Yjsルームを指定プロジェクトに切り替えます。roomNameを省略すると 'mda_{projectId}' が使用されます。",
           inputSchema: {
             type: "object",
             properties: {
@@ -308,18 +319,8 @@ async function main() {
 
       switch (name) {
         // --- プロジェクト管理 ---
-        case "list_projects": {
-          const projects = getRegistryProjects();
-          if (projects.length === 0) {
-            return { content: [{ type: "text", text: JSON.stringify({
-              projects: [],
-              hint: 'プロジェクトが見つかりません。フロントエンドが起動中か確認してください。レジストリ同期はフロントエンド起動時に行われます。'
-            }, null, 2) }] };
-          }
-          return { content: [{ type: "text", text: JSON.stringify(projects, null, 2) }] };
-        }
         case "switch_project": {
-          const roomName = args.roomName || resolveRoomName(args.projectId);
+          const roomName = args.roomName; // roomNameはconnectToProject内で解決
           await connectToProject(args.projectId, roomName);
           const actualRoom = _currentRoomName;
           return { content: [{ type: "text", text: `プロジェクトを切り替えました: ${args.projectId} (room: ${actualRoom})` }] };
@@ -514,10 +515,38 @@ async function main() {
       res.status(404).send("Session not found");
     }
   });
+  };
 
-  const PORT = 3000;
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`MCP HTTP Server running at http://0.0.0.0:${PORT}/sse`);
+  // --- HTTP & WebSocket Server Setup ---
+  const server = http.createServer(app);
+  const wss = new WebSocketServer({ noServer: true });
+  const registryWss = new WebSocketServer({ noServer: true });
+
+  // プロジェクト一覧APIをセットアップ
+  setupRegistryEndpoints(app, registryWss);
+
+  // MCPサーバーをセットアップ
+  setupMcpServer(app);
+
+  server.on('upgrade', (request, socket, head) => {
+    const { pathname } = new URL(request.url, `http://${request.headers.host}`);
+    
+    if (pathname === '/ws-registry') {
+      registryWss.handleUpgrade(request, socket, head, (ws) => {
+        registryWss.emit('connection', ws, request);
+      });
+    } else {
+      // y-websocket用の接続ハンドリング
+      wss.handleUpgrade(request, socket, head, (ws) => {
+        // _ydoc が現在接続中のプロジェクトのY.Docを指すようにする
+        setupWSConnection(ws, request, { doc: _ydoc });
+      });
+    }
+  });
+
+  const PORT = 1234; // フロントエンドが接続するポート
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log(`MCP, API, and WebSocket server running at http://0.0.0.0:${PORT}`);
   });
 }
 

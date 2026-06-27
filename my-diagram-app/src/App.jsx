@@ -34,7 +34,7 @@ import TabBar, { VIEW_TYPES } from './components/TabBar';
 import TableView from './components/views/TableView';
 import BlockDiagramView from './components/views/BlockDiagramView';
 import PlaceholderView from './components/views/PlaceholderView';
-import * as PS from './utils/projectStore.js';
+import * as projectStore from './utils/projectStore.js';
 import { initProjectRegistry, syncProjectRegistry, destroyProjectRegistry } from './utils/projectRegistry.js';
 import ProjectBrowserDialog from './components/ProjectBrowserDialog.jsx';
 import DiagramBrowserDialog from './components/DiagramBrowserDialog.jsx';
@@ -65,7 +65,7 @@ function initYjsForProject(projectId) {
   try { _indexeddbInst?.destroy();  } catch {}
   try { _ydocInst?.destroy();       } catch {}
 
-  const roomName    = PS.getRoomName(projectId);
+  const roomName    = projectStore.getRoomName(projectId);
   _ydocInst         = new Y.Doc();
   _providerInst     = new WebrtcProvider(roomName, _ydocInst);
   try {
@@ -78,10 +78,10 @@ function initYjsForProject(projectId) {
 }
 
 // 起動時に初期化
-let ydoc = initYjsForProject(PS.getActiveProjectId());
+let ydoc = new Y.Doc(); // Start with a dummy doc
 
 // プロジェクトレジストリ初期化（MCPサーバーがプロジェクト一覧を取得するため）
-initProjectRegistry();
+initProjectRegistry(); // This is now fully async
 
 // HMR時にYjsプロバイダーをクリーンアップ（開発モードの重複ルームエラー防止）
 if (import.meta.hot) {
@@ -1951,26 +1951,40 @@ let _tabIdCounter = 2;
 
 export default function App() {
   // ── プロジェクト状態 ──
-  const [activeProjectId, setActiveProjectId] = useState(() => PS.getActiveProjectId());
+  const [activeProjectId, setActiveProjectId] = useState(null); // Start with null, wait for registry
   const [projectKey, setProjectKey] = useState(0);
   const [appProjectName, setAppProjectName] = useState(() => {
-    const p = PS.getProjects().find(pr => pr.id === PS.getActiveProjectId());
+    const p = projectStore.getProjects().find(pr => pr.id === projectStore.getActiveProjectId());
     return p?.name || 'プロジェクト';
   });
 
   // ── タブ状態（localStorage から復元） ──
   const [tabs, setTabs] = useState(() => {
-    const saved = PS.getTabState(PS.getActiveProjectId());
+    const saved = projectStore.getTabState(projectStore.getActiveProjectId());
     return saved?.tabs || [{ id: 'tab-1', type: 'node-graph', title: 'ノードグラフ' }];
   });
   const [activeTabId, setActiveTabId] = useState(() => {
-    const saved = PS.getTabState(PS.getActiveProjectId());
+    const saved = projectStore.getTabState(projectStore.getActiveProjectId());
     return saved?.activeTabId || 'tab-1';
   });
 
   // ── ダイアログ表示状態 ──
   const [showProjectBrowser, setShowProjectBrowser] = useState(false);
   const [showDiagramBrowser, setShowDiagramBrowser] = useState(false);
+
+  // [修正] アプリケーション起動時にサーバーからプロジェクトリストを取得し、Yjsを初期化
+  useEffect(() => {
+    // projectRegistryが初期化されるのを待つ
+    const unobserve = projectStore.observeProjects((projects) => {
+      if (projects.length > 0) {
+        const initialProjectId = projectStore.getActiveProjectId(); // これで有効なIDが取れる
+        setActiveProjectId(initialProjectId);
+        ydoc = initYjsForProject(initialProjectId);
+        setProjectKey(k => k + 1); // Force re-render of children with new ydoc
+        unobserve(); // 一度だけ実行
+      }
+    });
+  }, []);
 
   // ── Yjs projectMeta の名前変更を監視 ──
   useEffect(() => {
@@ -1985,7 +1999,7 @@ export default function App() {
 
   // ── タブを localStorage に自動保存 ──
   useEffect(() => {
-    PS.saveTabs(activeProjectId, tabs, activeTabId);
+    projectStore.saveTabs(activeProjectId, tabs, activeTabId);
   }, [tabs, activeTabId, activeProjectId]);
 
   // ── ブロック図を新規作成してタブを開く ──
@@ -2046,10 +2060,10 @@ export default function App() {
 
   // ── プロジェクト切り替え ──
   const switchProject = useCallback((projectId) => {
-    PS.saveTabs(activeProjectId, tabs, activeTabId);
+    projectStore.saveTabs(activeProjectId, tabs, activeTabId);
     ydoc = initYjsForProject(projectId);
-    PS.setActiveProjectId(projectId);
-    const saved = PS.getTabState(projectId);
+    projectStore.setActiveProjectId(projectId);
+    const saved = projectStore.getTabState(projectId);
     const newTabs = saved?.tabs || [{ id: 'tab-1', type: 'node-graph', title: 'ノードグラフ' }];
     const newActiveTabId = saved?.activeTabId || 'tab-1';
     setActiveProjectId(projectId);
@@ -2057,11 +2071,36 @@ export default function App() {
     setActiveTabId(newActiveTabId);
     setShowProjectBrowser(false);
     // 切り替え先のプロジェクト名を反映
-    const proj = PS.getProjects().find(p => p.id === projectId);
+    const proj = projectStore.getProjects().find(p => p.id === projectId);
     setAppProjectName(proj?.name || 'プロジェクト');
     setProjectKey(k => k + 1);
   }, [activeProjectId, tabs, activeTabId]);
 
+  
+  // ── プロジェクト削除 ──
+  const deleteProject = useCallback(async (projectIdToDelete) => {
+    const projectToDelete = projectStore.findProject(projectIdToDelete);
+    if (!window.confirm(`プロジェクト「${projectToDelete?.name || projectIdToDelete}」を削除しますか？\nこの操作は取り消せません。`)) {
+      return;
+    }
+
+    // サーバーへの削除リクエストが完了するのを待つ
+    await projectStore.deleteProject(projectIdToDelete);
+
+    // WebSocket経由で更新された最新のプロジェクトリストを取得
+    const remainingProjects = projectStore.getProjects();
+
+    if (remainingProjects.length > 0) {
+      // 削除したプロジェクトが現在開いているものだった場合、先頭のプロジェクトに切り替える
+      if (activeProjectId === projectIdToDelete) {
+        switchProject(remainingProjects[0].id);
+      }
+    } else {
+      setActiveProjectId(null);
+      setShowProjectBrowser(false);
+    }
+  }, [switchProject]);
+  
   // ── ビュー追加（ブロック図は createAndOpenDiagram で処理） ──
   const addTab = useCallback((type) => {
     if (type === 'block-diagram') { createAndOpenDiagram(); return; }
@@ -2146,7 +2185,7 @@ export default function App() {
   const commitProjectName = useCallback((newName) => {
     const name = (typeof newName === 'string' ? newName : '').trim();
     if (name) {
-      PS.renameProject(activeProjectId, name);
+      projectStore.renameProject(activeProjectId, name);
       const ypm = ydoc.getMap('projectMeta');
       ypm.set('name', name);
       setAppProjectName(name);
@@ -2165,6 +2204,36 @@ export default function App() {
       setFocusNodeId(nodeId);
     }
   }, [tabs]);
+
+  // ── プロジェクトが存在しない場合のUI ──
+  if (!activeProjectId) {
+    return (
+      <div style={{ width: '100%', height: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: '#1e1e1e' }}>
+        {/* グローバルコマンドバーのみ表示 */}
+        <GlobalBar
+          setShowProjectBrowser={() => setShowProjectBrowser(true)}
+          setShowDiagramBrowser={() => { /* プロジェクトがないので何もしない */ }}
+          onAddTab={() => { /* プロジェクトがないので何もしない */ }}
+        />
+        <div style={{ flex: 1, display: 'grid', placeItems: 'center', color: '#a0a0b8', fontFamily: 'system-ui' }}>
+          <div>
+            <p>プロジェクトが選択されていません。</p>
+            <p>「プロジェクト」メニューから既存のプロジェクトを開くか、新規作成してください。</p>
+          </div>
+        </div>
+
+        {/* ── プロジェクトブラウザ（プロジェクトがない場合もここから作成するため必要） ── */}
+        {showProjectBrowser && (
+          <ProjectBrowserDialog
+            activeProjectId={activeProjectId}
+            onSwitch={switchProject}
+            onDelete={deleteProject}
+            onClose={() => setShowProjectBrowser(false)}
+          />
+        )}
+      </div>
+    );
+  }
 
   return (
     <div key={projectKey} style={{ width: '100%', height: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
@@ -2218,6 +2287,7 @@ export default function App() {
         <ProjectBrowserDialog
           activeProjectId={activeProjectId}
           onSwitch={switchProject}
+          onDelete={deleteProject}
           onClose={() => setShowProjectBrowser(false)}
         />
       )}
