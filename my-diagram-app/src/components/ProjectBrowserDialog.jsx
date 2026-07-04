@@ -2,48 +2,54 @@
  * ProjectBrowserDialog.jsx
  * プロジェクト一覧の閲覧・切り替え・作成・削除ダイアログ。
  */
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback } from 'react';
 import BrowserDialog from './BrowserDialog.jsx';
-import { observeProjects, createProject, deleteProject, renameProject } from '../utils/projectRegistry.js';
+import * as PS from '../utils/projectStore.js';
+import { syncProjectRegistry } from '../utils/projectRegistry.js';
 
-export default function ProjectBrowserDialog({ activeProjectId, onSwitch, onDelete, onClose }) {
-  const [projects, setProjects] = useState([]);
+export default function ProjectBrowserDialog({ activeProjectId, onSwitch, onClose }) {
+  const [projects, setProjects] = useState(() => PS.getProjects());
 
-  // projectRegistryからの更新を購読する
-  useEffect(() => {
-    const unobserve = observeProjects((updatedProjects) => {
-      setProjects(updatedProjects);
-    });
-
-    // コンポーネントがアンマウントされた時に購読を解除
-    return () => unobserve();
-  }, []);
+  const refresh = () => setProjects(PS.getProjects());
 
   const handleSelect = useCallback((item) => {
     if (item.id === activeProjectId) { onClose(); return; }
     onSwitch(item.id);
   }, [activeProjectId, onSwitch, onClose]);
 
-  const handleNew = useCallback(() => {
-    (async () => {
-      const name = window.prompt('新しいプロジェクト名を入力してください:', '新規プロジェクト');
-      if (name?.trim()) {
-        const newProject = await createProject(name.trim());
-        // 作成後、すぐにそのプロジェクトに切り替える
-        onSwitch(newProject.id);
-      }
-    })();
-  }, []);
+  const handleNew = useCallback(async () => {
+    console.log('[ProjectBrowser] 「新規作成」ボタンがクリックされました。');
+    const name = window.prompt('新しいプロジェクト名を入力してください:', '新規プロジェクト');
+    if (!name?.trim()) {
+      console.log('[ProjectBrowser] プロジェクト作成がキャンセルされたか、名前が空です。');
+      return;
+    }
+    try {
+      console.log(`[ProjectBrowser] projectStore.createProject を呼び出します。名前: "${name.trim()}"`);
+      const newProject = await PS.createProject(name.trim());
+      console.log('[ProjectBrowser] 新しいプロジェクトが作成されました:', newProject);
+      console.log('[ProjectBrowser] onSwitch を呼び出して、新しいプロジェクトに切り替えます。');
+      onSwitch(newProject.id);
+    } catch (error) {
+      console.error('[ProjectBrowser] プロジェクトの作成に失敗しました:', error);
+      alert('プロジェクトの作成に失敗しました。コンソールを確認してください。');
+    }
+  }, [onSwitch]);
 
   const handleDelete = useCallback((item) => {
-    // App.jsxから渡された削除関数を呼び出す
-    // 確認ダイアログや画面遷移のロジックはApp.jsx側で一元管理される
-    onDelete(item.id);
-  }, [onDelete]);
+    if (item.id === activeProjectId) {
+      alert('現在開いているプロジェクトは削除できません。');
+      return;
+    }
+    PS.deleteProject(item.id);
+    refresh();
+    syncProjectRegistry();
+  }, [activeProjectId]);
 
   const handleRename = useCallback(({ id }, name) => {
-    // WebSocket経由でリストが更新されるため、ここではAPIを呼ぶだけ
-    renameProject(id, name);
+    PS.renameProject(id, name);
+    refresh();
+    syncProjectRegistry();
   }, []);
 
   return (
@@ -54,9 +60,7 @@ export default function ProjectBrowserDialog({ activeProjectId, onSwitch, onDele
       onSelect={handleSelect}
       onNew={handleNew}
       newLabel="＋ 新規プロジェクトを作成"
-      // App.jsx側でプロジェクトが0件になる場合の処理が実装されたので、
-      // 最後の1件でも削除できるようにする
-      onDelete={handleDelete}
+      onDelete={projects.length > 1 ? handleDelete : undefined}
       onRename={handleRename}
       onClose={onClose}
       searchPlaceholder="プロジェクト名で検索…"

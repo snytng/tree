@@ -10,7 +10,8 @@
     "start:all": "concurrently \"npm run dev\" \"npm run dev:mcp\"",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview --host 0.0.0.0"
+    "preview": "vite preview --host 0.0.0.0",
+    "reset:server": "node reset-server.js"
   },
   "dependencies": {
     "concurrently": "^9.0.0",

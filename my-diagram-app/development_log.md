@@ -629,3 +629,11 @@ Vite + React + React Flowで、ノード（四角）とエッジ（線）を動�
 - **動作確認**: レジストリに2プロジェクト確認 (proj_default: react-flow-demo-room, proj_mpsfmee3_61us: mda_proj_mpsfmee3_61us)。AIによる list_projects → switch_project → read_graph / add_node / connect_nodes / update_node を2プロジェクト跨ぎで実行成功。
 - **USAGE.md 更新**: `list_projects` ツール追加、使用フロー説明の改訂、注意書き更新。
 - **状況**: テスト完了 (Done)。
+
+## 2.98 プロジェクト作成機能の安定化とリセット機能の実装 (2026-07-04 09:15 JST)
+- **[B-044] 実装**:
+    - `ProjectBrowserDialog.jsx` のプロジェクト作成処理を `async/await` に対応させ、API呼び出し完了後に画面を切り替えるように修正。
+    - `mcp-server/index.js` のCORS設定を緩和し、LAN内からのアクセスを許可。
+    - `npm run reset:server` コマンドを実装し、`reset-server.js` (ESM対応) で `mcp-server/projects.json` を削除する機能を追加。
+    - `USAGE.md` に開発環境のリセット手順を追記。
+- **状況**: ユーザーによる動作確認完了。
