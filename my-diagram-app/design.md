@@ -718,3 +718,19 @@
     - [ ] `add_edge_to_diagram` でブロック図にエッジが追加されること。
     - [ ] `get_project_name` でプロジェクト名が返ること。
     - [ ] `update_project_name` で名前を変更し、フロントエンドにリアルタイム反映されること。
+
+## 60. [D-060] プロジェクト作成安定化とリセット機能の設計
+- **プロジェクト作成の非同期対応**:
+    - `ProjectBrowserDialog.jsx` の `handleNew` 関数を `async` に変更。
+    - `projectStore.createProject()` (実体は `projectRegistry` のAPI呼び出し) を `await` で待機し、Promiseが解決されてから `onSwitch()` を呼び出す。
+    - `try...catch` でAPI呼び出しの失敗を捕捉し、ユーザーにアラートを表示する。
+- **CORS設定の緩和**:
+    - `mcp-server/index.js` の `cors()` ミドルウェアの引数を空にすることで、開発時に `localhost` 以外のIPアドレス（例: `192.168.x.x`）からのアクセスも許可する。
+- **環境リセット機能**:
+    - **サーバー側**:
+        - `reset-server.js` スクリプトを作成。Node.jsの `fs` モジュールを使い、`mcp-server/projects.json` を削除する。ESM構文 (`import`) に対応。
+        - `package.json` の `scripts` に `reset:server` を追加し、上記スクリプトを実行するコマンドを定義。
+    - **ブラウザ側**:
+        - 手動操作による `localStorage` と `IndexedDB` のデータ削除を手順として定義。
+    - **ドキュメント**:
+        - `USAGE.md` に「開発環境のリセット」セクションを追加し、サーバー停止 → `npm run reset:server` 実行 → ブラウザデータ削除 → サーバー再起動、という一連の手順を明記する。

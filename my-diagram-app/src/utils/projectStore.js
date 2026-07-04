@@ -65,6 +65,9 @@ export function getTabState(projectId) {
 export function getProjects() {
   return PR.getProjects();
 }
+export function createProject(name) {
+  return PR.createProject(name);
+}
 export function deleteProject(id) {
   return PR.deleteProject(id);
 }

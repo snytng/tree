@@ -59,7 +59,8 @@
     { "from": "S-054", "to": "D-057", "type": "realizes" },
     { "from": "S-055", "to": "D-058", "type": "realizes" },
     { "from": "S-056", "to": "D-059", "type": "realizes" },
-    { "from": "S-057", "to": "D-059", "type": "realizes" }
+    { "from": "S-057", "to": "D-059", "type": "realizes" },
+    { "from": "S-058", "to": "D-060", "type": "realizes" }
   ],
 
   "dependencies": [
@@ -87,7 +88,9 @@
     { "from": "D-058", "to": "D-023", "type": "impacts", "reason": "D-023の固定ルーム名接続をD-058の動的接続管理に置き換え" },
     { "from": "D-059", "to": "D-023", "type": "impacts", "reason": "D-023の既存5ツールに加え、8つの新ツールを追加" },
     { "from": "D-058", "to": "D-048", "type": "depends-on", "reason": "ルーム名生成ロジック(mda_{projectId})をフロントエンドと同一規則で使用" },
-    { "from": "D-059", "to": "D-053", "type": "depends-on", "reason": "bdLayout/bdEdgesのMap名規則をBlockDiagramViewと同一にする必要" }
+    { "from": "D-059", "to": "D-053", "type": "depends-on", "reason": "bdLayout/bdEdgesのMap名規則をBlockDiagramViewと同一にする必要" },
+    { "from": "D-060", "to": "D-050", "type": "impacts", "reason": "ProjectBrowserDialog.jsxのプロジェクト作成ロジックを非同期対応に変更" },
+    { "from": "D-060", "to": "D-058", "type": "depends-on", "reason": "mcp-server/index.jsのAPIエンドポイントの存在に依存" }
   ],
 
   "implementations": [
@@ -145,7 +148,8 @@
     { "design": "D-056", "files": ["src/hooks/CustomNode.jsx"] },
     { "design": "D-057", "files": ["src/App.jsx"] },
     { "design": "D-058", "files": ["mcp-server/index.js"] },
-    { "design": "D-059", "files": ["mcp-server/index.js"] }
+    { "design": "D-059", "files": ["mcp-server/index.js"] },
+    { "design": "D-060", "files": ["src/components/ProjectBrowserDialog.jsx", "mcp-server/index.js", "package.json", "reset-server.js", "USAGE.md"] }
   ],
 
   "sharedResources": [
@@ -220,6 +224,12 @@
       "description": "Yjs WebSocket同期サーバー",
       "usedBy": ["D-001", "D-023", "D-048", "D-058"],
       "files": ["src/App.jsx", "mcp-server/index.js"]
+    },
+    {
+      "resource": "mcp-server/projects.json",
+      "description": "サーバー側のプロジェクト一覧のバックアップファイル",
+      "usedBy": ["D-058", "D-060"],
+      "files": ["mcp-server/index.js", "reset-server.js"]
     }
   ]
 }

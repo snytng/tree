@@ -149,12 +149,8 @@ function setupRegistryEndpoints(app, registryWss) {
 // ============================================================
 async function main() {
   const app = express();
-  // CORS設定を明示的に行う
-  app.use(cors({
-    origin: 'http://localhost:5173', // フロントエンドのオリジンを許可
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type'],
-  }));
+  // [修正] 開発用に、すべてのオリジンからのリクエストを許可する
+  app.use(cors());
 
   // APIリクエスト用に express.json() を使用
   app.use(express.json());

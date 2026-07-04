@@ -78,10 +78,10 @@ function initYjsForProject(projectId) {
 }
 
 // 起動時に初期化
-let ydoc = new Y.Doc(); // Start with a dummy doc
+let ydoc = initYjsForProject(projectStore.getActiveProjectId());
 
 // プロジェクトレジストリ初期化（MCPサーバーがプロジェクト一覧を取得するため）
-initProjectRegistry(); // This is now fully async
+initProjectRegistry(ydoc);
 
 // HMR時にYjsプロバイダーをクリーンアップ（開発モードの重複ルームエラー防止）
 if (import.meta.hot) {
@@ -97,6 +97,17 @@ if (import.meta.hot) {
 
 const initialNodes = [];
 const initialEdges = [];
+
+// [修正] nodeTypesとedgeTypesをコンポーネントの外で定義して再生成を防ぐ
+const nodeTypes = {
+  custom: CustomNode,
+  default: CustomNode,
+};
+
+const edgeTypes = {
+  rubberband: RubberBandEdge,
+};
+
 
 function Flow() {
   const [nodes, setNodes, onNodesChangeState] = useNodesState(initialNodes);
@@ -174,17 +185,6 @@ function Flow() {
 
   // [B-019] 単一テキストファイル入出力
   const { exportProject, importProject } = useFileIO(yNodes, yEdges, yProjectMeta, projectName);
-
-  // nodeTypesをコンポーネント内でmemo化して参照を安定させる
-  const nodeTypes = useMemo(() => ({
-    custom: CustomNode,
-    default: CustomNode,
-  }), []);
-
-  // [B-031] エッジタイプの登録
-  const edgeTypes = useMemo(() => ({
-    rubberband: RubberBandEdge,
-  }), []);
 
   // 最新の状態を常に参照するためのRef (クロージャ問題と連打対策)
   const nodesRef = React.useRef(nodes);
@@ -1951,7 +1951,7 @@ let _tabIdCounter = 2;
 
 export default function App() {
   // ── プロジェクト状態 ──
-  const [activeProjectId, setActiveProjectId] = useState(null); // Start with null, wait for registry
+  const [activeProjectId, setActiveProjectId] = useState(() => projectStore.getActiveProjectId());
   const [projectKey, setProjectKey] = useState(0);
   const [appProjectName, setAppProjectName] = useState(() => {
     const p = projectStore.getProjects().find(pr => pr.id === projectStore.getActiveProjectId());
@@ -1972,20 +1972,6 @@ export default function App() {
   const [showProjectBrowser, setShowProjectBrowser] = useState(false);
   const [showDiagramBrowser, setShowDiagramBrowser] = useState(false);
 
-  // [修正] アプリケーション起動時にサーバーからプロジェクトリストを取得し、Yjsを初期化
-  useEffect(() => {
-    // projectRegistryが初期化されるのを待つ
-    const unobserve = projectStore.observeProjects((projects) => {
-      if (projects.length > 0) {
-        const initialProjectId = projectStore.getActiveProjectId(); // これで有効なIDが取れる
-        setActiveProjectId(initialProjectId);
-        ydoc = initYjsForProject(initialProjectId);
-        setProjectKey(k => k + 1); // Force re-render of children with new ydoc
-        unobserve(); // 一度だけ実行
-      }
-    });
-  }, []);
-
   // ── Yjs projectMeta の名前変更を監視 ──
   useEffect(() => {
     const ypm = ydoc.getMap('projectMeta');
@@ -1999,7 +1985,9 @@ export default function App() {
 
   // ── タブを localStorage に自動保存 ──
   useEffect(() => {
-    projectStore.saveTabs(activeProjectId, tabs, activeTabId);
+    if (activeProjectId) {
+      projectStore.saveTabs(activeProjectId, tabs, activeTabId);
+    }
   }, [tabs, activeTabId, activeProjectId]);
 
   // ── ブロック図を新規作成してタブを開く ──
@@ -2076,31 +2064,6 @@ export default function App() {
     setProjectKey(k => k + 1);
   }, [activeProjectId, tabs, activeTabId]);
 
-  
-  // ── プロジェクト削除 ──
-  const deleteProject = useCallback(async (projectIdToDelete) => {
-    const projectToDelete = projectStore.findProject(projectIdToDelete);
-    if (!window.confirm(`プロジェクト「${projectToDelete?.name || projectIdToDelete}」を削除しますか？\nこの操作は取り消せません。`)) {
-      return;
-    }
-
-    // サーバーへの削除リクエストが完了するのを待つ
-    await projectStore.deleteProject(projectIdToDelete);
-
-    // WebSocket経由で更新された最新のプロジェクトリストを取得
-    const remainingProjects = projectStore.getProjects();
-
-    if (remainingProjects.length > 0) {
-      // 削除したプロジェクトが現在開いているものだった場合、先頭のプロジェクトに切り替える
-      if (activeProjectId === projectIdToDelete) {
-        switchProject(remainingProjects[0].id);
-      }
-    } else {
-      setActiveProjectId(null);
-      setShowProjectBrowser(false);
-    }
-  }, [switchProject]);
-  
   // ── ビュー追加（ブロック図は createAndOpenDiagram で処理） ──
   const addTab = useCallback((type) => {
     if (type === 'block-diagram') { createAndOpenDiagram(); return; }
@@ -2227,7 +2190,6 @@ export default function App() {
           <ProjectBrowserDialog
             activeProjectId={activeProjectId}
             onSwitch={switchProject}
-            onDelete={deleteProject}
             onClose={() => setShowProjectBrowser(false)}
           />
         )}
@@ -2287,7 +2249,6 @@ export default function App() {
         <ProjectBrowserDialog
           activeProjectId={activeProjectId}
           onSwitch={switchProject}
-          onDelete={deleteProject}
           onClose={() => setShowProjectBrowser(false)}
         />
       )}
